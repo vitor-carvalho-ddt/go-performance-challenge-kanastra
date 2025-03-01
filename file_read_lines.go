@@ -1,4 +1,3 @@
-
 package main
 
 import(
@@ -8,6 +7,21 @@ import(
 	"bufio"
 	"strings"
 )
+
+// STRUCT SIZE = 32bits + 32bits + 16bits + 16bits = 12bytes
+type data_statistics{
+	float32 soma
+	int32 num_records
+	int16 max
+	int16 min
+}
+
+// STRUCT SIZE = 3*12bytes = 36bytes
+type data_fields{
+	data_statistics vn
+	data_statistics vp
+	data_statistics va
+}
 
 func check(e error){
 	if e != nil {
@@ -33,6 +47,12 @@ func IndexOfNth(text string, delimiter rune, nth int) int {
 }
 
 func main(){
+	// Constants definition
+	const VALOR_NOMINAL_COL int8 = 11
+	const VALOR_PRESENTE_COL int8 = 12
+	const VALOR_AQUISICAO_COL int8 = 13
+	const NU_DOCUMENTO_COL int8 = 16
+
 	// Fetching CWD
 	ex, err := os.Executable()
 	check(err)
