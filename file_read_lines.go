@@ -1,15 +1,27 @@
 package main
 
 import(
+	"flag"
 	"fmt"
 	"os"
 	"math"
+	"io/fs"
 	"path/filepath"
 	"bufio"
 	"strings"
 	"strconv"
 	"golang.org/x/exp/constraints"
 )
+
+// Global debug flag
+var debug bool
+
+func init() {
+	// Register a flag called "debug" that can be used on the command line.
+	flag.BoolVar(&debug, "debug", false, "Enable debug output")
+	// Parse command-line flags early so that 'debug' is available to the rest of the program.
+	flag.Parse()
+}
 
 type Number interface {
     constraints.Integer | constraints.Float
@@ -129,12 +141,28 @@ func IndexOfNth(text string, delimiter rune, nth int8) int {
 }
 
 
-func FetchDataCols(text string, delimiter rune) []string{
+func FetchDataCols(text string, delimiter rune) (line_data []string){
+	// Set a default empty value.
+	line_data = []string{}
+
+	// Defer a function to catch any panic that might occur.
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Printf("Error in FetchDataCols: %v\n", r)
+			// line_data is already set to empty; you could also reset it here explicitly.
+			line_data = []string{}
+		}
+	}()
+
 	// Constants definition
 	const VALOR_NOMINAL_COL int8 = 9
 	const VALOR_PRESENTE_COL int8 = 12
 	const VALOR_AQUISICAO_COL int8 = 11
 	const NU_DOCUMENTO_COL int8 = 16
+
+	if debug{
+		fmt.Println("Text: %s\n", text)
+	}
 
 	data_string_start_pos := IndexOfNth(text, delimiter, VALOR_NOMINAL_COL)
 
@@ -150,9 +178,17 @@ func FetchDataCols(text string, delimiter rune) []string{
 	va_delimiter_pos := strings.IndexRune(text, delimiter)
 	va_data := text[:va_delimiter_pos]
 
+	if debug{
+		fmt.Printf("\nCurrent Text: %s\n", text)
+		fmt.Printf("\nNU_DOCUMENTO_COL-VALOR_AQUISICAO_COL: %d\n\n\n", NU_DOCUMENTO_COL-VALOR_AQUISICAO_COL)
+	}
 	nu_doc_start_pos := IndexOfNth(text, delimiter, (NU_DOCUMENTO_COL-VALOR_AQUISICAO_COL))
 	text = text[nu_doc_start_pos+1:]
 	nu_doc_delimiter_pos := strings.IndexRune(text, delimiter)
+	if debug{
+		fmt.Printf("\nCurrent Text: %s\n", text)
+		fmt.Printf("\nnu_doc_delimiter_pos: %d\n\n\n", nu_doc_delimiter_pos)
+	}
 	nu_doc_data := text[:nu_doc_delimiter_pos]
 
 	// Parse ',' to ''
@@ -160,35 +196,28 @@ func FetchDataCols(text string, delimiter rune) []string{
 	vp_data = strings.Replace(vp_data, ",", "", -1)
 	va_data = strings.Replace(va_data, ",", "", -1)
 
-	line_data := []string{vn_data, vp_data, va_data, nu_doc_data}
-
-	return line_data
+	line_data = []string{vn_data, vp_data, va_data, nu_doc_data}
+	return
 }
 
-func GenerateFilePtr() *os.File{
-	// Fetching CWD
+func GetCWD()string{
 	ex, err := os.Executable()
 	check(err)
 	exPath := filepath.Dir(ex)
-	fmt.Println(exPath)
-
-	// Constructing File Path
-	filename := "58148845000109_Estoque_PICPAY FGTS FIDC_001.csv"
-	filedir := "/files/"
-	filepath := exPath + filedir + filename
-	fmt.Println(filepath)
-
-	// Opening File Pointer
-	filePtr, err := os.Open(filepath)
-	check(err)
-	return filePtr
+	return exPath
 }
 
-func main(){
-	// Initializing my map data structure
-	map_statistics := make(map[string]*DataFields)
-	// For each file
-	filePtr := GenerateFilePtr()
+func GetFilePathList(folder_path string)[]fs.DirEntry{
+	entries, err := os.ReadDir(folder_path)
+	check(err)
+	return entries
+}
+
+func ParseCSVFile(filepath string, map_statistics map[string]*DataFields){
+	// Open File Ptr
+	filePtr, err := os.Open(filepath)
+	check(err)
+	defer filePtr.Close()
 	// Counting Lines in the file
 	scanner := bufio.NewScanner(filePtr)
 	i := 0
@@ -205,8 +234,19 @@ func main(){
 		line := scanner.Text()
 		delimiter := ';'
 
+		if debug{
+			fmt.Printf("FILEPATH: %s\n\n", filepath)
+		}
 		line_data := FetchDataCols(line, delimiter)
-		// fmt.Printf("\n\nData: %v\n\n", line_data)
+		if len(line_data)<4{
+			fmt.Printf("FILEPATH THREW ERROR: %s\n\n", filepath)
+			continue
+		}
+
+		if debug{
+			fmt.Printf("\n\nData: %v\n\n", line_data)
+		}
+
 		nu_documento := line_data[3]
 
 		_, ok := map_statistics[nu_documento]
@@ -226,26 +266,28 @@ func main(){
 		map_statistics[nu_documento].vp.ComputeStatistics(float32(vp))
 		map_statistics[nu_documento].va.ComputeStatistics(float32(va))
 
-		if nu_documento == "112328086"{
-			map_statistics[nu_documento].vn.PrintStatistics("VN")
-			map_statistics[nu_documento].vp.PrintStatistics("VP")
-			map_statistics[nu_documento].va.PrintStatistics("VA")
-			fmt.Println("------------------------------------------------------------------\n")
+		if debug{
+			if nu_documento == "112328086"{
+				map_statistics[nu_documento].vn.PrintStatistics("VN")
+				map_statistics[nu_documento].vp.PrintStatistics("VP")
+				map_statistics[nu_documento].va.PrintStatistics("VA")
+				fmt.Println("------------------------------------------------------------------\n")
+			}
 		}
 
 		i += 1
 	}
-	filePtr.Close()
-	
+}
+
+func GenerateOutPutFile(map_statistics map[string]*DataFields){
 	// Creating dir if not exists
 	err := os.MkdirAll("output", 0755)
 	check(err)
-
 	// Build new file
 	output_filename := "output/calculations.csv"
 	// Open the file with the flags: append, create if not exists, and write only.
 	// The permission 0644 means the owner can read/write, and others can read.
-	filePtr, err = os.OpenFile(output_filename, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+	filePtr, err := os.OpenFile(output_filename, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 	check(err)
 	defer filePtr.Close()
 	// Write to file
@@ -259,4 +301,24 @@ func main(){
 		_, err = filePtr.WriteString(data_str)
 		check(err)
 	}
+}
+
+func main(){
+	// Getting all filenames
+	cwd := GetCWD()
+	folder_path := cwd + "/files"
+	filenames := GetFilePathList(folder_path)
+	// Initializing my map data structure
+	map_statistics := make(map[string]*DataFields)
+	// Parsing all files	
+	var filepath string
+	for _, filename := range filenames{
+		if (strings.Contains(filename.Name(), "Zone.Identifier")) || (!strings.Contains(filename.Name(), ".csv")){
+			continue
+		}
+		filepath = folder_path + "/" + filename.Name()
+		ParseCSVFile(filepath, map_statistics)
+	}
+	// Generate Output File
+	GenerateOutPutFile(map_statistics)
 }
