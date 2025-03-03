@@ -84,6 +84,26 @@ func(ds *DataStatistics) PrintStatistics(field_name string){
 	fmt.Printf("Statistics: \nSum: %.3f | Mean: %.2f | Max: %.2f | Min: %.2f\n\n", ds.sum, ds.sum/float32(ds.num_records), ds.max, ds.min)
 }
 
+func PrintDataRow(key string, df *DataFields) string {
+	return fmt.Sprintf("%s;%.2f;%.2f;%.2f;%.2f;%.2f;%.2f;%.2f;%.2f;%.2f;%.2f;%.2f;%.2f\n",
+		key,
+		df.vn.sum,
+		df.vn.sum/float32(df.vn.num_records),
+		df.vn.max,
+		df.vn.min,
+
+		df.vp.sum,
+		df.vp.sum/float32(df.vp.num_records),
+		df.vp.max,
+		df.vp.min,
+
+		df.va.sum,
+		df.va.sum/float32(df.va.num_records),
+		df.va.max,
+		df.va.min,
+	)
+}
+
 func check(e error){
 	if e != nil {
 		panic(e)
@@ -135,12 +155,17 @@ func FetchDataCols(text string, delimiter rune) []string{
 	nu_doc_delimiter_pos := strings.IndexRune(text, delimiter)
 	nu_doc_data := text[:nu_doc_delimiter_pos]
 
+	// Parse ',' to ''
+	vn_data = strings.Replace(vn_data, ",", "", -1)
+	vp_data = strings.Replace(vp_data, ",", "", -1)
+	va_data = strings.Replace(va_data, ",", "", -1)
+
 	line_data := []string{vn_data, vp_data, va_data, nu_doc_data}
 
 	return line_data
 }
 
-func main(){
+func GenerateFilePtr() *os.File{
 	// Fetching CWD
 	ex, err := os.Executable()
 	check(err)
@@ -156,27 +181,32 @@ func main(){
 	// Opening File Pointer
 	filePtr, err := os.Open(filepath)
 	check(err)
-	defer filePtr.Close()
+	return filePtr
+}
 
+func main(){
+	// Initializing my map data structure
+	map_statistics := make(map[string]*DataFields)
+	// For each file
+	filePtr := GenerateFilePtr()
 	// Counting Lines in the file
 	scanner := bufio.NewScanner(filePtr)
 	i := 0
-	// Initializing my map data structure
-	map_statistics := make(map[string]*DataFields)
 	for scanner.Scan(){
 		// Skipping column names
 		if i == 0{
 			i+=1
 			continue
 		}
-		if i >= 5{
-			break;
-		}
+		// Only used to limit number of rows computed
+		// if i >= 5{
+		// 	break;
+		// }
 		line := scanner.Text()
 		delimiter := ';'
 
 		line_data := FetchDataCols(line, delimiter)
-		fmt.Printf("\n\nData: %v\n\n", line_data)
+		// fmt.Printf("\n\nData: %v\n\n", line_data)
 		nu_documento := line_data[3]
 
 		_, ok := map_statistics[nu_documento]
@@ -196,14 +226,37 @@ func main(){
 		map_statistics[nu_documento].vp.ComputeStatistics(float32(vp))
 		map_statistics[nu_documento].va.ComputeStatistics(float32(va))
 
-		map_statistics[nu_documento].vn.PrintStatistics("VN")
-		map_statistics[nu_documento].vp.PrintStatistics("VP")
-		map_statistics[nu_documento].va.PrintStatistics("VA")
+		if nu_documento == "112328086"{
+			map_statistics[nu_documento].vn.PrintStatistics("VN")
+			map_statistics[nu_documento].vp.PrintStatistics("VP")
+			map_statistics[nu_documento].va.PrintStatistics("VA")
+			fmt.Println("------------------------------------------------------------------\n")
+		}
 
 		i += 1
 	}
+	filePtr.Close()
+	
+	// Creating dir if not exists
+	err := os.MkdirAll("output", 0755)
+	check(err)
 
-	if err := scanner.Err(); err != nil {
-        fmt.Println("Error reading file:", err)
-    }
+	// Build new file
+	output_filename := "output/calculations.csv"
+	// Open the file with the flags: append, create if not exists, and write only.
+	// The permission 0644 means the owner can read/write, and others can read.
+	filePtr, err = os.OpenFile(output_filename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	check(err)
+	defer filePtr.Close()
+	// Write to file
+	col_names := "NU_DOCUMENTO;VN_SOMA;VN_MEDIA;VN_MAX;VN_MIN;VP_SOMA;VP_MEDIA;VP_MAX;VP_MIN;VA_SOMA;VA_MEDIA;VA_MAX;VA_MIN\n"
+	_, err = filePtr.WriteString(col_names)
+	check(err)
+
+	var data_str string
+	for key, _ := range map_statistics {
+		data_str = PrintDataRow(key, map_statistics[key])
+		_, err = filePtr.WriteString(data_str)
+		check(err)
+	}
 }
