@@ -245,7 +245,7 @@ func main(){
 	output_filename := "output/calculations.csv"
 	// Open the file with the flags: append, create if not exists, and write only.
 	// The permission 0644 means the owner can read/write, and others can read.
-	filePtr, err = os.OpenFile(output_filename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	filePtr, err = os.OpenFile(output_filename, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 	check(err)
 	defer filePtr.Close()
 	// Write to file
