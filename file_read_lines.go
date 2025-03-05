@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"requirements/constants"
 )
 
 // Mutex for writing to the same map
@@ -22,10 +23,26 @@ var mu sync.Mutex
 
 // Global debug flag
 var debug bool
+var filterDocNum string
+var filterNomeCedente string
+var filterDocCedente string
+var filterNomeSacado string
+var filterDocSacado string
 
 func init() {
 	// Register a flag called "debug" that can be used on the command line.
 	flag.BoolVar(&debug, "debug", false, "Enable debug output")
+	// Filter by Document Number | Example: 113982936
+	flag.StringVar(&filterDocNum, "docnum", "", "Filter by a specific document number")
+	// Filter by Nome Cedente | Example: PICPAY BANK   BANCO MULTIPLO S A
+	flag.StringVar(&filterNomeCedente, "nomecedente", "", "Filter by a specific Cedente name")
+	// Filter by Doc Cedente | Example: 09.516.419/0001-75
+	flag.StringVar(&filterDocCedente, "doccedente", "", "Filter by a specific Cedente document")
+	// Filter by Nome Sacado | Example: JOSE CLEVERTON FRANCELINO NASCIMENTO
+	flag.StringVar(&filterNomeSacado, "nomesacado", "", "Filter by a specific Sacado name")
+	// Filter by Doc Sacado | Example: 066.407.504-57
+	flag.StringVar(&filterDocSacado, "docsacado", "", "Filter by a specific document Sacado document")
+
 	// Parse command-line flags early so that 'debug' is available to the rest of the program.
 	flag.Parse()
 }
@@ -46,11 +63,15 @@ func(ds *DataStatistics) setMin(value float32) {
 	ds.min = value
 }
 
-// STRUCT SIZE = 3*16bytes = 48bytes
+// STRUCT SIZE = 3*16bytes = 48bytes + strings
 type DataFields struct{
 	vn DataStatistics
 	vp DataStatistics
 	va DataStatistics
+	nome_cedente string
+	doc_cedente string
+	nome_sacado string
+	doc_sacado string
 }
 
 func(df *DataFields) SetInitialValues(){
@@ -84,7 +105,8 @@ func PrintDataRow(key string, df *DataFields) string {
 
 	fmt.Fprintf(&sb, "%s;%.2f;%.2f;%.2f;%.2f;", key, df.vn.sum, df.vn.sum/float32(df.vn.num_records), df.vn.max, df.vn.min)
 	fmt.Fprintf(&sb, "%.2f;%.2f;%.2f;%.2f;", df.vp.sum, df.vp.sum/float32(df.vp.num_records), df.vp.max, df.vp.min)
-	fmt.Fprintf(&sb, "%.2f;%.2f;%.2f;%.2f\n", df.va.sum, df.va.sum/float32(df.va.num_records), df.va.max, df.va.min)
+	fmt.Fprintf(&sb, "%.2f;%.2f;%.2f;%.2f;", df.va.sum, df.va.sum/float32(df.va.num_records), df.va.max, df.va.min)
+	fmt.Fprintf(&sb, "%s;%s;%s;%s\n", df.nome_cedente, df.doc_cedente, df.nome_sacado, df.doc_sacado)
 
 	return sb.String()
 }
@@ -96,26 +118,28 @@ func check(e error){
 }
 
 func FetchDataCols(text string, delimiter rune) (line_data []string) {
-	const VALOR_NOMINAL_COL = 9
-	const VALOR_PRESENTE_COL = 10
-	const VALOR_AQUISICAO_COL = 11
-	const NU_DOCUMENTO_COL = 16
 
 	// Split text into parts
 	parts := strings.SplitN(text, string(delimiter), -1)
 	
 	// Validate that we have enough parts
-	if len(parts) < int(NU_DOCUMENTO_COL)+1 {
+	if len(parts) < int(constants.NU_DOCUMENTO_COL)+1 {
 		return []string{}
 	}
 
-	// Extract relevant fields
-	vn_data := strings.ReplaceAll(parts[VALOR_NOMINAL_COL], ",", "")
-	vp_data := strings.ReplaceAll(parts[VALOR_PRESENTE_COL], ",", "")
-	va_data := strings.ReplaceAll(parts[VALOR_AQUISICAO_COL], ",", "")
-	nu_doc_data := parts[NU_DOCUMENTO_COL]
+	// Extracting Mainly Filter Fields
+	nome_cedente := parts[constants.NOME_CEDENTE_COL]
+	doc_cedente := parts[constants.DOC_CEDENTE_COL]
+	nome_sacado := parts[constants.NOME_SACADO_COL]
+	doc_sacado := parts[constants.DOC_SACADO_COL]
 
-	line_data = []string{vn_data, vp_data, va_data, nu_doc_data}
+	// Extract relevant fields
+	vn_data := strings.ReplaceAll(parts[constants.VALOR_NOMINAL_COL], ",", "")
+	vp_data := strings.ReplaceAll(parts[constants.VALOR_PRESENTE_COL], ",", "")
+	va_data := strings.ReplaceAll(parts[constants.VALOR_AQUISICAO_COL], ",", "")
+	nu_doc_data := parts[constants.NU_DOCUMENTO_COL]
+
+	line_data = []string{vn_data, vp_data, va_data, nu_doc_data, nome_cedente, doc_cedente, nome_sacado, doc_sacado}
 
 	return line_data
 }
@@ -149,6 +173,7 @@ func ParseCSVFile(filepath string, map_statistics map[string]*DataFields, wg *sy
 	buf := make([]byte, maxCapacity)
 	scanner.Buffer(buf, maxCapacity)
 	lineNum := 0
+	line := ""
 	for scanner.Scan(){
 		// Skipping column names
 		if lineNum == 0{
@@ -156,18 +181,15 @@ func ParseCSVFile(filepath string, map_statistics map[string]*DataFields, wg *sy
 			continue
 		}
 		// Only used to limit number of rows computed
-		// if i >= 5{
-		// 	break;
-		// }
-		line := scanner.Text()
+		line = scanner.Text()
 		delimiter := ';'
 
 		if debug{
 			fmt.Printf("FILEPATH: %s\n\n", filepath)
 		}
 		line_data := FetchDataCols(line, delimiter)
-		if len(line_data)<4{
-			fmt.Printf("FILEPATH THREW ERROR: %s\n\n", filepath)
+		if len(line_data)<1{
+			fmt.Printf("FILEPATH WITH LINE ERROR:\n %s\n\n", filepath)
 			continue
 		}
 
@@ -175,7 +197,19 @@ func ParseCSVFile(filepath string, map_statistics map[string]*DataFields, wg *sy
 			fmt.Printf("\n\nData: %v\n\n", line_data)
 		}
 
+		// Extracting Filters
 		nu_documento := line_data[3]
+		nome_cedente := line_data[4]
+		doc_cedente := line_data[5]
+		nome_sacado := line_data[6]
+		doc_sacado := line_data[7]
+
+		// Filter map so we can loop through filters
+		if filterDocNum!="" && filterDocNum!=nu_documento{continue}
+		if filterNomeCedente!="" && strings.ToUpper(filterNomeCedente)!=nome_cedente{continue}
+		if filterDocCedente!="" && filterDocCedente!=doc_cedente{continue}
+		if filterNomeSacado!="" && strings.ToUpper(filterNomeSacado)!=nome_sacado{continue}	
+		if filterDocSacado!="" && filterDocSacado!=doc_sacado{continue}
 
 		// Lock before modifying the shared structure
 		mu.Lock()
@@ -184,6 +218,10 @@ func ParseCSVFile(filepath string, map_statistics map[string]*DataFields, wg *sy
 			df = &DataFields{}
 			df.SetInitialValues()
 			map_statistics[nu_documento] = df
+			map_statistics[nu_documento].nome_cedente = nome_cedente
+			map_statistics[nu_documento].doc_cedente = doc_cedente
+			map_statistics[nu_documento].nome_sacado = nome_sacado
+			map_statistics[nu_documento].doc_sacado = doc_sacado
 		}
 
 		vn, err := strconv.ParseFloat(line_data[0], 32)
@@ -218,7 +256,7 @@ func GenerateOutputFile(map_statistics map[string]*DataFields){
 	writer := bufio.NewWriter(filePtr)
 
 	// Write to file
-	col_names := "NU_DOCUMENTO;VN_SOMA;VN_MEDIA;VN_MAX;VN_MIN;VP_SOMA;VP_MEDIA;VP_MAX;VP_MIN;VA_SOMA;VA_MEDIA;VA_MAX;VA_MIN\n"
+	col_names := "NU_DOCUMENTO;VN_SOMA;VN_MEDIA;VN_MAX;VN_MIN;VP_SOMA;VP_MEDIA;VP_MAX;VP_MIN;VA_SOMA;VA_MEDIA;VA_MAX;VA_MIN;NOME_CEDENTE;DOC_CEDENTE;NOME_SACADO;DOC_SACADO\n"
 	writer.WriteString(col_names)
 	writer.Flush()
 
