@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 // Mutex for writing to the same map
@@ -29,20 +30,12 @@ func init() {
 	flag.Parse()
 }
 
-// STRUCT SIZE = 32bits + 32bits + 16bits + 16bits = 12bytes
+// STRUCT SIZE = 32bits * 4 = 16bytes
 type DataStatistics struct{
 	sum float32
 	num_records int32
 	max float32
 	min float32
-}
-
-func(ds *DataStatistics) setSum(value float32) {
-	ds.sum = value
-}
-
-func(ds *DataStatistics) setNumRecords(value int32) {
-	ds.num_records = value
 }
 
 func(ds *DataStatistics) setMax(value float32) {
@@ -53,7 +46,7 @@ func(ds *DataStatistics) setMin(value float32) {
 	ds.min = value
 }
 
-// STRUCT SIZE = 3*12bytes = 36bytes
+// STRUCT SIZE = 3*16bytes = 48bytes
 type DataFields struct{
 	vn DataStatistics
 	vp DataStatistics
@@ -83,11 +76,6 @@ func(ds *DataStatistics) ComputeStatistics(value float32){
 	if value < ds.min{
 		ds.min = value
 	}
-}
-
-func(ds *DataStatistics) PrintStatistics(field_name string){
-	fmt.Printf("%s Data:\n", field_name)
-	fmt.Printf("Statistics: \nSum: %.3f | Mean: %.2f | Max: %.2f | Min: %.2f\n\n", ds.sum, ds.sum/float32(ds.num_records), ds.max, ds.min)
 }
 
 func PrintDataRow(key string, df *DataFields) string {
@@ -156,15 +144,15 @@ func ParseCSVFile(filepath string, map_statistics map[string]*DataFields, wg *sy
 	defer filePtr.Close()
 	// Counting Lines in the file
 	scanner := bufio.NewScanner(filePtr)
-	// Set a larger buffer (e.g., 10MB)
-	const maxCapacity = 300 * 1024 // 300KB
+	// Setting a buffer for 64Kb
+	const maxCapacity = 64 * 1024
 	buf := make([]byte, maxCapacity)
 	scanner.Buffer(buf, maxCapacity)
-	i := 0
+	lineNum := 0
 	for scanner.Scan(){
 		// Skipping column names
-		if i == 0{
-			i+=1
+		if lineNum == 0{
+			lineNum++
 			continue
 		}
 		// Only used to limit number of rows computed
@@ -197,7 +185,6 @@ func ParseCSVFile(filepath string, map_statistics map[string]*DataFields, wg *sy
 			df.SetInitialValues()
 			map_statistics[nu_documento] = df
 		}
-		mu.Unlock()
 
 		vn, err := strconv.ParseFloat(line_data[0], 32)
         check(err)
@@ -206,14 +193,12 @@ func ParseCSVFile(filepath string, map_statistics map[string]*DataFields, wg *sy
         va, err := strconv.ParseFloat(line_data[2], 32)
         check(err)
 
-		// Lock again before modifying inner struct data
-		mu.Lock()
 		df.vn.ComputeStatistics(float32(vn))
 		df.vp.ComputeStatistics(float32(vp))
 		df.va.ComputeStatistics(float32(va))
 		mu.Unlock()
 
-		i += 1
+		lineNum += 1
 	}
 }
 
@@ -248,6 +233,22 @@ func GenerateOutputFile(map_statistics map[string]*DataFields){
 }
 
 func main() {
+	// Start time tracking
+	start := time.Now()
+	// Create file to store CPU profile
+    cpuProfileFile, err := os.Create("cpu_profile.pprof")
+    if err != nil {
+        log.Fatal("could not create CPU profile: ", err)
+    }
+    defer cpuProfileFile.Close()
+
+	// Start CPU profiling
+    if err := pprof.StartCPUProfile(cpuProfileFile); err != nil {
+        log.Fatal("could not start CPU profile: ", err)
+    }
+    // Ensure profiling is stopped when main finishes
+    defer pprof.StopCPUProfile()
+
 	cwd := GetCWD()
 	folderPath := cwd + "/files"
 
@@ -258,6 +259,11 @@ func main() {
 
 	filenames := GetFilePathList(folderPath)
 
+	// Creating my map data structure
+	// Key: ~32 bytes
+	// Value pointer: 8 bytes
+	// DataFields: 48 bytes
+	// Subtotal: 32 + 8 + 48 = 88 bytes per entry
 	mapStatistics := make(map[string]*DataFields)
 	var wg sync.WaitGroup
 
@@ -288,5 +294,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	fmt.Println("Memory profile saved to mem_profile.pprof")
+	// Print total execution time
+	elapsed := time.Since(start)
+	fmt.Printf("Execution Time: %s\n", elapsed)
 }
