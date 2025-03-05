@@ -4,18 +4,19 @@ import (
 	"bufio"
 	"flag"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"math"
-	"runtime/pprof"
 	_ "net/http/pprof" // Importing pprof to register debug handlers
 	"os"
 	"path/filepath"
+	"requirements/constants"
+	"runtime/pprof"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
-	"requirements/constants"
 )
 
 // Mutex for writing to the same map
@@ -48,33 +49,33 @@ func init() {
 }
 
 // STRUCT SIZE = 32bits * 4 = 16bytes
-type DataStatistics struct{
-	sum float32
+type DataStatistics struct {
+	sum         float32
 	num_records int32
-	max float32
-	min float32
+	max         float32
+	min         float32
 }
 
-func(ds *DataStatistics) setMax(value float32) {
+func (ds *DataStatistics) setMax(value float32) {
 	ds.max = value
 }
 
-func(ds *DataStatistics) setMin(value float32) {
+func (ds *DataStatistics) setMin(value float32) {
 	ds.min = value
 }
 
 // STRUCT SIZE = 3*16bytes = 48bytes + strings
-type DataFields struct{
-	vn DataStatistics
-	vp DataStatistics
-	va DataStatistics
+type DataFields struct {
+	vn           DataStatistics
+	vp           DataStatistics
+	va           DataStatistics
 	nome_cedente string
-	doc_cedente string
-	nome_sacado string
-	doc_sacado string
+	doc_cedente  string
+	nome_sacado  string
+	doc_sacado   string
 }
 
-func(df *DataFields) SetInitialValues(){
+func (df *DataFields) SetInitialValues() {
 	df.vn.setMax(float32(math.Inf(-1)))
 	df.vn.setMin(float32(math.Inf(1)))
 
@@ -85,23 +86,23 @@ func(df *DataFields) SetInitialValues(){
 	df.va.setMin(float32(math.Inf(1)))
 }
 
-func(ds *DataStatistics) ComputeStatistics(value float32){
+func (ds *DataStatistics) ComputeStatistics(value float32) {
 	// Adding value to sum
 	ds.sum += value
 	ds.num_records += 1
-	
-	if value > ds.max{
+
+	if value > ds.max {
 		ds.max = value
 	}
 
-	if value < ds.min{
+	if value < ds.min {
 		ds.min = value
 	}
 }
 
 func PrintDataRow(key string, df *DataFields) string {
 	var sb strings.Builder
-	sb.Grow(256)
+	sb.Grow(1024)
 
 	fmt.Fprintf(&sb, "%s;%.2f;%.2f;%.2f;%.2f;", key, df.vn.sum, df.vn.sum/float32(df.vn.num_records), df.vn.max, df.vn.min)
 	fmt.Fprintf(&sb, "%.2f;%.2f;%.2f;%.2f;", df.vp.sum, df.vp.sum/float32(df.vp.num_records), df.vp.max, df.vp.min)
@@ -111,7 +112,7 @@ func PrintDataRow(key string, df *DataFields) string {
 	return sb.String()
 }
 
-func check(e error){
+func check(e error) {
 	if e != nil {
 		panic(e)
 	}
@@ -121,7 +122,7 @@ func FetchDataCols(text string, delimiter rune) (line_data []string) {
 
 	// Split text into parts
 	parts := strings.SplitN(text, string(delimiter), -1)
-	
+
 	// Validate that we have enough parts
 	if len(parts) < int(constants.NU_DOCUMENTO_COL)+1 {
 		return []string{}
@@ -144,21 +145,20 @@ func FetchDataCols(text string, delimiter rune) (line_data []string) {
 	return line_data
 }
 
-
-func GetCWD()string{
+func GetCWD() string {
 	ex, err := os.Executable()
 	check(err)
 	exPath := filepath.Dir(ex)
 	return exPath
 }
 
-func GetFilePathList(folder_path string)[]fs.DirEntry{
+func GetFilePathList(folder_path string) []fs.DirEntry {
 	entries, err := os.ReadDir(folder_path)
 	check(err)
 	return entries
 }
 
-func ParseCSVFile(filepath string, map_statistics map[string]*DataFields, wg *sync.WaitGroup){
+func ParseCSVFile(filepath string, map_statistics map[string]*DataFields, wg *sync.WaitGroup, bufReaderPool *sync.Pool) {
 	// Signal that this goroutine is done
 	defer wg.Done()
 
@@ -167,33 +167,43 @@ func ParseCSVFile(filepath string, map_statistics map[string]*DataFields, wg *sy
 	check(err)
 	defer filePtr.Close()
 	// Counting Lines in the file
-	scanner := bufio.NewScanner(filePtr)
-	// Setting a buffer for 64Kb
-	const maxCapacity = 64 * 1024
-	buf := make([]byte, maxCapacity)
-	scanner.Buffer(buf, maxCapacity)
+	bufReader := GetBufReader(filePtr, bufReaderPool)
+	defer PutBufReader(bufReader, bufReaderPool)
+
 	lineNum := 0
 	line := ""
-	for scanner.Scan(){
+	delimiter := ';'
+	eof_flag := false
+	for {
+		// Read line by line
+		line, err = bufReader.ReadString('\n')
+		if err != nil {
+			// If we reached the end of file, print the last line if not empty.
+			if err == io.EOF {
+				if len(line) > 0 {
+					eof_flag = true
+				}
+				break
+			}
+			fmt.Printf("Error reading line: %v\n", err)
+			break
+		}
 		// Skipping column names
-		if lineNum == 0{
+		if lineNum == 0 {
 			lineNum++
 			continue
 		}
-		// Only used to limit number of rows computed
-		line = scanner.Text()
-		delimiter := ';'
 
-		if debug{
+		if debug {
 			fmt.Printf("FILEPATH: %s\n\n", filepath)
 		}
 		line_data := FetchDataCols(line, delimiter)
-		if len(line_data)<1{
+		if len(line_data) < 1 {
 			fmt.Printf("FILEPATH WITH LINE ERROR:\n %s\n\n", filepath)
 			continue
 		}
 
-		if debug{
+		if debug {
 			fmt.Printf("\n\nData: %v\n\n", line_data)
 		}
 
@@ -205,16 +215,26 @@ func ParseCSVFile(filepath string, map_statistics map[string]*DataFields, wg *sy
 		doc_sacado := line_data[7]
 
 		// Filter map so we can loop through filters
-		if filterDocNum!="" && filterDocNum!=nu_documento{continue}
-		if filterNomeCedente!="" && strings.ToUpper(filterNomeCedente)!=nome_cedente{continue}
-		if filterDocCedente!="" && filterDocCedente!=doc_cedente{continue}
-		if filterNomeSacado!="" && strings.ToUpper(filterNomeSacado)!=nome_sacado{continue}	
-		if filterDocSacado!="" && filterDocSacado!=doc_sacado{continue}
+		if filterDocNum != "" && filterDocNum != nu_documento {
+			continue
+		}
+		if filterNomeCedente != "" && strings.ToUpper(filterNomeCedente) != nome_cedente {
+			continue
+		}
+		if filterDocCedente != "" && filterDocCedente != doc_cedente {
+			continue
+		}
+		if filterNomeSacado != "" && strings.ToUpper(filterNomeSacado) != nome_sacado {
+			continue
+		}
+		if filterDocSacado != "" && filterDocSacado != doc_sacado {
+			continue
+		}
 
 		// Lock before modifying the shared structure
 		mu.Lock()
 		df, exists := map_statistics[nu_documento]
-		if !exists{
+		if !exists {
 			df = &DataFields{}
 			df.SetInitialValues()
 			map_statistics[nu_documento] = df
@@ -225,11 +245,11 @@ func ParseCSVFile(filepath string, map_statistics map[string]*DataFields, wg *sy
 		}
 
 		vn, err := strconv.ParseFloat(line_data[0], 32)
-        check(err)
-        vp, err := strconv.ParseFloat(line_data[1], 32)
-        check(err)
-        va, err := strconv.ParseFloat(line_data[2], 32)
-        check(err)
+		check(err)
+		vp, err := strconv.ParseFloat(line_data[1], 32)
+		check(err)
+		va, err := strconv.ParseFloat(line_data[2], 32)
+		check(err)
 
 		df.vn.ComputeStatistics(float32(vn))
 		df.vp.ComputeStatistics(float32(vp))
@@ -237,10 +257,14 @@ func ParseCSVFile(filepath string, map_statistics map[string]*DataFields, wg *sy
 		mu.Unlock()
 
 		lineNum += 1
+
+		if eof_flag {
+			break
+		}
 	}
 }
 
-func GenerateOutputFile(map_statistics map[string]*DataFields){
+func GenerateOutputFile(map_statistics map[string]*DataFields) {
 	// Creating dir if not exists
 	err := os.MkdirAll("output", 0755)
 	check(err)
@@ -270,22 +294,35 @@ func GenerateOutputFile(map_statistics map[string]*DataFields){
 	writer.Flush()
 }
 
+// GetBufReader retrieves a *bufio.Reader from the pool and resets it with the provided reader.
+func GetBufReader(r io.Reader, bufReaderPool *sync.Pool) *bufio.Reader {
+	br := bufReaderPool.Get().(*bufio.Reader)
+	br.Reset(r) // Reset attaches the new reader to the buffered reader.
+	return br
+}
+
+// PutBufReader returns a *bufio.Reader back to the pool after use.
+func PutBufReader(br *bufio.Reader, bufReaderPool *sync.Pool) {
+	// Optionally, you might want to clear or discard any buffered data.
+	bufReaderPool.Put(br)
+}
+
 func main() {
 	// Start time tracking
 	start := time.Now()
 	// Create file to store CPU profile
-    cpuProfileFile, err := os.Create("cpu_profile.pprof")
-    if err != nil {
-        log.Fatal("could not create CPU profile: ", err)
-    }
-    defer cpuProfileFile.Close()
+	cpuProfileFile, err := os.Create("cpu_profile.pprof")
+	if err != nil {
+		log.Fatal("could not create CPU profile: ", err)
+	}
+	defer cpuProfileFile.Close()
 
 	// Start CPU profiling
-    if err := pprof.StartCPUProfile(cpuProfileFile); err != nil {
-        log.Fatal("could not start CPU profile: ", err)
-    }
-    // Ensure profiling is stopped when main finishes
-    defer pprof.StopCPUProfile()
+	if err := pprof.StartCPUProfile(cpuProfileFile); err != nil {
+		log.Fatal("could not start CPU profile: ", err)
+	}
+	// Ensure profiling is stopped when main finishes
+	defer pprof.StopCPUProfile()
 
 	cwd := GetCWD()
 	folderPath := cwd + "/files"
@@ -305,19 +342,27 @@ func main() {
 	mapStatistics := make(map[string]*DataFields)
 	var wg sync.WaitGroup
 
+	// Initializing a buffer syncPool
+	bufferSize := 200 * 1024 // 200Kb
+	bufferPool := sync.Pool{
+		New: func() interface{} {
+			return bufio.NewReaderSize(nil, bufferSize)
+		},
+	}
+
 	for _, filename := range filenames {
 		if strings.Contains(filename.Name(), "Zone.Identifier") || !strings.HasSuffix(filename.Name(), ".csv") {
 			continue
 		}
 		wg.Add(1)
-		go ParseCSVFile(folderPath+"/"+filename.Name(), mapStatistics, &wg)
+		go ParseCSVFile(folderPath+"/"+filename.Name(), mapStatistics, &wg, &bufferPool)
 	}
 
 	wg.Wait()
 
 	GenerateOutputFile(mapStatistics)
 
-	// Write Memory Profile at the END of execution 🔹 🔹
+	// Write Memory Profile at the END of execution
 	f, err := os.Create("mem_profile.pprof")
 	if err != nil {
 		log.Fatal(err)
