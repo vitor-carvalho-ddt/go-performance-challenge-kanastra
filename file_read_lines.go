@@ -7,7 +7,7 @@ import (
 	"io/fs"
 	"log"
 	"math"
-	"net/http"
+	"runtime/pprof"
 	_ "net/http/pprof" // Importing pprof to register debug handlers
 	"os"
 	"path/filepath"
@@ -156,6 +156,10 @@ func ParseCSVFile(filepath string, map_statistics map[string]*DataFields, wg *sy
 	defer filePtr.Close()
 	// Counting Lines in the file
 	scanner := bufio.NewScanner(filePtr)
+	// Set a larger buffer (e.g., 10MB)
+	const maxCapacity = 300 * 1024 // 300KB
+	buf := make([]byte, maxCapacity)
+	scanner.Buffer(buf, maxCapacity)
 	i := 0
 	for scanner.Scan(){
 		// Skipping column names
@@ -244,12 +248,6 @@ func GenerateOutputFile(map_statistics map[string]*DataFields){
 }
 
 func main() {
-	// Start pprof server in a separate goroutine
-	go func() {
-		log.Println("Starting pprof server on http://localhost:6060/debug/pprof/")
-		log.Println(http.ListenAndServe("localhost:6060", nil))
-	}()
-
 	cwd := GetCWD()
 	folderPath := cwd + "/files"
 
@@ -275,6 +273,20 @@ func main() {
 
 	GenerateOutputFile(mapStatistics)
 
-	// Keep the main goroutine running
-	select {}
+	// Write Memory Profile at the END of execution 🔹 🔹
+	f, err := os.Create("mem_profile.pprof")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer f.Close()
+
+	// OPTIONAL: Run GC before profiling (useful in some cases)
+	// runtime.GC()
+
+	// Write the memory profile after processing
+	if err := pprof.WriteHeapProfile(f); err != nil {
+		log.Fatal(err)
+	}
+
+	fmt.Println("Memory profile saved to mem_profile.pprof")
 }
