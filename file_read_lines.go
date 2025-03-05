@@ -1,16 +1,23 @@
 package main
 
-import(
+import (
+	"bufio"
 	"flag"
 	"fmt"
-	"os"
-	"math"
 	"io/fs"
+	"log"
+	"math"
+	"net/http"
+	_ "net/http/pprof" // Importing pprof to register debug handlers
+	"os"
 	"path/filepath"
-	"bufio"
-	"strings"
 	"strconv"
+	"strings"
+	"sync"
 )
+
+// Mutex for writing to the same map
+var mu sync.Mutex
 
 // Global debug flag
 var debug bool
@@ -139,7 +146,10 @@ func GetFilePathList(folder_path string)[]fs.DirEntry{
 	return entries
 }
 
-func ParseCSVFile(filepath string, map_statistics map[string]*DataFields){
+func ParseCSVFile(filepath string, map_statistics map[string]*DataFields, wg *sync.WaitGroup){
+	// Signal that this goroutine is done
+	defer wg.Done()
+
 	// Open File Ptr
 	filePtr, err := os.Open(filepath)
 	check(err)
@@ -175,12 +185,15 @@ func ParseCSVFile(filepath string, map_statistics map[string]*DataFields){
 
 		nu_documento := line_data[3]
 
+		// Lock before modifying the shared structure
+		mu.Lock()
 		df, exists := map_statistics[nu_documento]
 		if !exists{
 			df = &DataFields{}
 			df.SetInitialValues()
 			map_statistics[nu_documento] = df
 		}
+		mu.Unlock()
 
 		vn, err := strconv.ParseFloat(line_data[0], 32)
         check(err)
@@ -189,15 +202,18 @@ func ParseCSVFile(filepath string, map_statistics map[string]*DataFields){
         va, err := strconv.ParseFloat(line_data[2], 32)
         check(err)
 
+		// Lock again before modifying inner struct data
+		mu.Lock()
 		df.vn.ComputeStatistics(float32(vn))
 		df.vp.ComputeStatistics(float32(vp))
 		df.va.ComputeStatistics(float32(va))
+		mu.Unlock()
 
 		i += 1
 	}
 }
 
-func GenerateOutPutFile(map_statistics map[string]*DataFields){
+func GenerateOutputFile(map_statistics map[string]*DataFields){
 	// Creating dir if not exists
 	err := os.MkdirAll("output", 0755)
 	check(err)
@@ -227,22 +243,38 @@ func GenerateOutPutFile(map_statistics map[string]*DataFields){
 	writer.Flush()
 }
 
-func main(){
-	// Getting all filenames
+func main() {
+	// Start pprof server in a separate goroutine
+	go func() {
+		log.Println("Starting pprof server on http://localhost:6060/debug/pprof/")
+		log.Println(http.ListenAndServe("localhost:6060", nil))
+	}()
+
 	cwd := GetCWD()
-	folder_path := cwd + "/files"
-	filenames := GetFilePathList(folder_path)
-	// Initializing my map data structure
-	map_statistics := make(map[string]*DataFields)
-	// Parsing all files	
-	var filepath string
-	for _, filename := range filenames{
-		if (strings.Contains(filename.Name(), "Zone.Identifier")) || (!strings.Contains(filename.Name(), ".csv")){
+	folderPath := cwd + "/files"
+
+	// Check if folder exists before proceeding
+	if _, err := os.Stat(folderPath); os.IsNotExist(err) {
+		log.Fatalf("Error: Folder %s does not exist.\n", folderPath)
+	}
+
+	filenames := GetFilePathList(folderPath)
+
+	mapStatistics := make(map[string]*DataFields)
+	var wg sync.WaitGroup
+
+	for _, filename := range filenames {
+		if strings.Contains(filename.Name(), "Zone.Identifier") || !strings.HasSuffix(filename.Name(), ".csv") {
 			continue
 		}
-		filepath = folder_path + "/" + filename.Name()
-		ParseCSVFile(filepath, map_statistics)
+		wg.Add(1)
+		go ParseCSVFile(folderPath+"/"+filename.Name(), mapStatistics, &wg)
 	}
-	// Generate Output File
-	GenerateOutPutFile(map_statistics)
+
+	wg.Wait()
+
+	GenerateOutputFile(mapStatistics)
+
+	// Keep the main goroutine running
+	select {}
 }
