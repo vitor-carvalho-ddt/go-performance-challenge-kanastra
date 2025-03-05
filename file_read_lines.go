@@ -100,11 +100,11 @@ func (ds *DataStatistics) ComputeStatistics(value float32) {
 	}
 }
 
-func PrintDataRow(key string, df *DataFields) string {
+func PrintDataRow(key uint32, df *DataFields) string {
 	var sb strings.Builder
 	sb.Grow(1024)
 
-	fmt.Fprintf(&sb, "%s;%.2f;%.2f;%.2f;%.2f;", key, df.vn.sum, df.vn.sum/float32(df.vn.num_records), df.vn.max, df.vn.min)
+	fmt.Fprintf(&sb, "%d;%.2f;%.2f;%.2f;%.2f;", key, df.vn.sum, df.vn.sum/float32(df.vn.num_records), df.vn.max, df.vn.min)
 	fmt.Fprintf(&sb, "%.2f;%.2f;%.2f;%.2f;", df.vp.sum, df.vp.sum/float32(df.vp.num_records), df.vp.max, df.vp.min)
 	fmt.Fprintf(&sb, "%.2f;%.2f;%.2f;%.2f;", df.va.sum, df.va.sum/float32(df.va.num_records), df.va.max, df.va.min)
 	fmt.Fprintf(&sb, "%s;%s;%s;%s\n", df.nome_cedente, df.doc_cedente, df.nome_sacado, df.doc_sacado)
@@ -158,7 +158,7 @@ func GetFilePathList(folder_path string) []fs.DirEntry {
 	return entries
 }
 
-func ParseCSVFile(filepath string, map_statistics map[string]*DataFields, wg *sync.WaitGroup, bufReaderPool *sync.Pool) {
+func ParseCSVFile(filepath string, map_statistics map[uint32]*DataFields, wg *sync.WaitGroup, bufReaderPool *sync.Pool) {
 	// Signal that this goroutine is done
 	defer wg.Done()
 
@@ -232,16 +232,19 @@ func ParseCSVFile(filepath string, map_statistics map[string]*DataFields, wg *sy
 		}
 
 		// Lock before modifying the shared structure
+		nu_documento_uint, err := strconv.ParseUint(nu_documento, 10, 32)
+		check(err)
+		nu_documento_uint32 := uint32(nu_documento_uint)
 		mu.Lock()
-		df, exists := map_statistics[nu_documento]
+		df, exists := map_statistics[nu_documento_uint32]
 		if !exists {
 			df = &DataFields{}
 			df.SetInitialValues()
-			map_statistics[nu_documento] = df
-			map_statistics[nu_documento].nome_cedente = nome_cedente
-			map_statistics[nu_documento].doc_cedente = doc_cedente
-			map_statistics[nu_documento].nome_sacado = nome_sacado
-			map_statistics[nu_documento].doc_sacado = doc_sacado
+			map_statistics[nu_documento_uint32] = df
+			map_statistics[nu_documento_uint32].nome_cedente = nome_cedente
+			map_statistics[nu_documento_uint32].doc_cedente = doc_cedente
+			map_statistics[nu_documento_uint32].nome_sacado = nome_sacado
+			map_statistics[nu_documento_uint32].doc_sacado = doc_sacado
 		}
 
 		vn, err := strconv.ParseFloat(line_data[0], 32)
@@ -264,7 +267,7 @@ func ParseCSVFile(filepath string, map_statistics map[string]*DataFields, wg *sy
 	}
 }
 
-func GenerateOutputFile(map_statistics map[string]*DataFields) {
+func GenerateOutputFile(map_statistics map[uint32]*DataFields) {
 	// Creating dir if not exists
 	err := os.MkdirAll("output", 0755)
 	check(err)
@@ -339,7 +342,7 @@ func main() {
 	// Value pointer: 8 bytes
 	// DataFields: 48 bytes
 	// Subtotal: 32 + 8 + 48 = 88 bytes per entry
-	mapStatistics := make(map[string]*DataFields)
+	mapStatistics := make(map[uint32]*DataFields)
 	var wg sync.WaitGroup
 
 	// Initializing a buffer syncPool
