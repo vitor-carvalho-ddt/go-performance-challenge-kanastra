@@ -10,7 +10,6 @@ import(
 	"bufio"
 	"strings"
 	"strconv"
-	"golang.org/x/exp/constraints"
 )
 
 // Global debug flag
@@ -21,24 +20,6 @@ func init() {
 	flag.BoolVar(&debug, "debug", false, "Enable debug output")
 	// Parse command-line flags early so that 'debug' is available to the rest of the program.
 	flag.Parse()
-}
-
-type Number interface {
-    constraints.Integer | constraints.Float
-}
-
-func max[T Number](a, b T) T {
-	if a > b{
-		return a
-	}
-	return b
-}
-
-func min[T Number](a, b T) T {
-	if a < b{
-		return a
-	}
-	return b
 }
 
 // STRUCT SIZE = 32bits + 32bits + 16bits + 16bits = 12bytes
@@ -85,10 +66,16 @@ func(df *DataFields) SetInitialValues(){
 
 func(ds *DataStatistics) ComputeStatistics(value float32){
 	// Adding value to sum
-	ds.setSum(ds.sum + value)
-	ds.setNumRecords(ds.num_records + 1)
-	ds.setMax(max(ds.max, value))
-	ds.setMin(min(ds.min, value))
+	ds.sum += value
+	ds.num_records += 1
+	
+	if value > ds.max{
+		ds.max = value
+	}
+
+	if value < ds.min{
+		ds.min = value
+	}
 }
 
 func(ds *DataStatistics) PrintStatistics(field_name string){
@@ -97,23 +84,14 @@ func(ds *DataStatistics) PrintStatistics(field_name string){
 }
 
 func PrintDataRow(key string, df *DataFields) string {
-	return fmt.Sprintf("%s;%.2f;%.2f;%.2f;%.2f;%.2f;%.2f;%.2f;%.2f;%.2f;%.2f;%.2f;%.2f\n",
-		key,
-		df.vn.sum,
-		df.vn.sum/float32(df.vn.num_records),
-		df.vn.max,
-		df.vn.min,
+	var sb strings.Builder
+	sb.Grow(256)
 
-		df.vp.sum,
-		df.vp.sum/float32(df.vp.num_records),
-		df.vp.max,
-		df.vp.min,
+	fmt.Fprintf(&sb, "%s;%.2f;%.2f;%.2f;%.2f;", key, df.vn.sum, df.vn.sum/float32(df.vn.num_records), df.vn.max, df.vn.min)
+	fmt.Fprintf(&sb, "%.2f;%.2f;%.2f;%.2f;", df.vp.sum, df.vp.sum/float32(df.vp.num_records), df.vp.max, df.vp.min)
+	fmt.Fprintf(&sb, "%.2f;%.2f;%.2f;%.2f\n", df.va.sum, df.va.sum/float32(df.va.num_records), df.va.max, df.va.min)
 
-		df.va.sum,
-		df.va.sum/float32(df.va.num_records),
-		df.va.max,
-		df.va.min,
-	)
+	return sb.String()
 }
 
 func check(e error){
@@ -122,83 +100,31 @@ func check(e error){
 	}
 }
 
-func IndexOfNth(text string, delimiter rune, nth int8) int {
-	s := 0;
-	last_pos := -1;
-	var i int8
-    for i = 0; i < nth; i++ {
-        s = strings.IndexRune(text[last_pos+1:], delimiter);
-        if s == -1{break};
-		if i == 0{
-			last_pos+=s+1
-		}else{
-			s+=1
-			last_pos+=s
-		}
-    }
-	// fmt.Printf("nth: %d | last_pos: %d\n", nth, last_pos)
-    return last_pos;
-}
+func FetchDataCols(text string, delimiter rune) (line_data []string) {
+	const VALOR_NOMINAL_COL = 9
+	const VALOR_PRESENTE_COL = 10
+	const VALOR_AQUISICAO_COL = 11
+	const NU_DOCUMENTO_COL = 16
 
-
-func FetchDataCols(text string, delimiter rune) (line_data []string){
-	// Set a default empty value.
-	line_data = []string{}
-
-	// Defer a function to catch any panic that might occur.
-	defer func() {
-		if r := recover(); r != nil {
-			fmt.Printf("Error in FetchDataCols: %v\n", r)
-			// line_data is already set to empty; you could also reset it here explicitly.
-			line_data = []string{}
-		}
-	}()
-
-	// Constants definition
-	const VALOR_NOMINAL_COL int8 = 9
-	const VALOR_PRESENTE_COL int8 = 12
-	const VALOR_AQUISICAO_COL int8 = 11
-	const NU_DOCUMENTO_COL int8 = 16
-
-	if debug{
-		fmt.Println("Text: %s\n", text)
+	// Split text into parts
+	parts := strings.SplitN(text, string(delimiter), -1)
+	
+	// Validate that we have enough parts
+	if len(parts) < int(NU_DOCUMENTO_COL)+1 {
+		return []string{}
 	}
 
-	data_string_start_pos := IndexOfNth(text, delimiter, VALOR_NOMINAL_COL)
-
-	text = text[data_string_start_pos+1:]
-	vn_delimiter_pos := strings.IndexRune(text, delimiter)
-	vn_data := text[:vn_delimiter_pos]
-
-	text = text[vn_delimiter_pos+1:]
-	vp_delimiter_pos := strings.IndexRune(text, delimiter)
-	vp_data := text[:vp_delimiter_pos]
-
-	text = text[vp_delimiter_pos+1:]
-	va_delimiter_pos := strings.IndexRune(text, delimiter)
-	va_data := text[:va_delimiter_pos]
-
-	if debug{
-		fmt.Printf("\nCurrent Text: %s\n", text)
-		fmt.Printf("\nNU_DOCUMENTO_COL-VALOR_AQUISICAO_COL: %d\n\n\n", NU_DOCUMENTO_COL-VALOR_AQUISICAO_COL)
-	}
-	nu_doc_start_pos := IndexOfNth(text, delimiter, (NU_DOCUMENTO_COL-VALOR_AQUISICAO_COL))
-	text = text[nu_doc_start_pos+1:]
-	nu_doc_delimiter_pos := strings.IndexRune(text, delimiter)
-	if debug{
-		fmt.Printf("\nCurrent Text: %s\n", text)
-		fmt.Printf("\nnu_doc_delimiter_pos: %d\n\n\n", nu_doc_delimiter_pos)
-	}
-	nu_doc_data := text[:nu_doc_delimiter_pos]
-
-	// Parse ',' to ''
-	vn_data = strings.Replace(vn_data, ",", "", -1)
-	vp_data = strings.Replace(vp_data, ",", "", -1)
-	va_data = strings.Replace(va_data, ",", "", -1)
+	// Extract relevant fields
+	vn_data := strings.ReplaceAll(parts[VALOR_NOMINAL_COL], ",", "")
+	vp_data := strings.ReplaceAll(parts[VALOR_PRESENTE_COL], ",", "")
+	va_data := strings.ReplaceAll(parts[VALOR_AQUISICAO_COL], ",", "")
+	nu_doc_data := parts[NU_DOCUMENTO_COL]
 
 	line_data = []string{vn_data, vp_data, va_data, nu_doc_data}
-	return
+
+	return line_data
 }
+
 
 func GetCWD()string{
 	ex, err := os.Executable()
@@ -249,10 +175,11 @@ func ParseCSVFile(filepath string, map_statistics map[string]*DataFields){
 
 		nu_documento := line_data[3]
 
-		_, ok := map_statistics[nu_documento]
-		if !ok{
-			map_statistics[nu_documento] = &DataFields{}
-			map_statistics[nu_documento].SetInitialValues()
+		df, exists := map_statistics[nu_documento]
+		if !exists{
+			df = &DataFields{}
+			df.SetInitialValues()
+			map_statistics[nu_documento] = df
 		}
 
 		vn, err := strconv.ParseFloat(line_data[0], 32)
@@ -262,18 +189,9 @@ func ParseCSVFile(filepath string, map_statistics map[string]*DataFields){
         va, err := strconv.ParseFloat(line_data[2], 32)
         check(err)
 
-		map_statistics[nu_documento].vn.ComputeStatistics(float32(vn))
-		map_statistics[nu_documento].vp.ComputeStatistics(float32(vp))
-		map_statistics[nu_documento].va.ComputeStatistics(float32(va))
-
-		if debug{
-			if nu_documento == "112328086"{
-				map_statistics[nu_documento].vn.PrintStatistics("VN")
-				map_statistics[nu_documento].vp.PrintStatistics("VP")
-				map_statistics[nu_documento].va.PrintStatistics("VA")
-				fmt.Println("------------------------------------------------------------------\n")
-			}
-		}
+		df.vn.ComputeStatistics(float32(vn))
+		df.vp.ComputeStatistics(float32(vp))
+		df.va.ComputeStatistics(float32(va))
 
 		i += 1
 	}
@@ -290,17 +208,23 @@ func GenerateOutPutFile(map_statistics map[string]*DataFields){
 	filePtr, err := os.OpenFile(output_filename, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 	check(err)
 	defer filePtr.Close()
+
+	// Use buffered writer
+	writer := bufio.NewWriter(filePtr)
+
 	// Write to file
 	col_names := "NU_DOCUMENTO;VN_SOMA;VN_MEDIA;VN_MAX;VN_MIN;VP_SOMA;VP_MEDIA;VP_MAX;VP_MIN;VA_SOMA;VA_MEDIA;VA_MAX;VA_MIN\n"
-	_, err = filePtr.WriteString(col_names)
-	check(err)
+	writer.WriteString(col_names)
+	writer.Flush()
 
 	var data_str string
-	for key, _ := range map_statistics {
-		data_str = PrintDataRow(key, map_statistics[key])
+	for key, df := range map_statistics {
+		data_str = PrintDataRow(key, df)
 		_, err = filePtr.WriteString(data_str)
 		check(err)
 	}
+
+	writer.Flush()
 }
 
 func main(){
