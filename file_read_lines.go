@@ -17,6 +17,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"bytes"
 )
 
 // Mutex for writing to the same map
@@ -118,14 +119,14 @@ func check(e error) {
 	}
 }
 
-func FetchDataCols(text string, delimiter rune) (line_data []string) {
+func FetchDataCols(line_bytes []byte, delimiter_bytes []byte) (line_data [][]byte) {
 
 	// Split text into parts
-	parts := strings.SplitN(text, string(delimiter), -1)
+	parts := bytes.Split(line_bytes, delimiter_bytes)
 
 	// Validate that we have enough parts
 	if len(parts) < int(constants.NU_DOCUMENTO_COL)+1 {
-		return []string{}
+		return [][]byte{}
 	}
 
 	// Extracting Mainly Filter Fields
@@ -134,13 +135,17 @@ func FetchDataCols(text string, delimiter rune) (line_data []string) {
 	nome_sacado := parts[constants.NOME_SACADO_COL]
 	doc_sacado := parts[constants.DOC_SACADO_COL]
 
+	// Comma bytes
+	comma_bytes := []byte(",")
+	empty_space_bytes := []byte("")
+
 	// Extract relevant fields
-	vn_data := strings.ReplaceAll(parts[constants.VALOR_NOMINAL_COL], ",", "")
-	vp_data := strings.ReplaceAll(parts[constants.VALOR_PRESENTE_COL], ",", "")
-	va_data := strings.ReplaceAll(parts[constants.VALOR_AQUISICAO_COL], ",", "")
+	vn_data := bytes.Replace(parts[constants.VALOR_NOMINAL_COL], comma_bytes, empty_space_bytes, -1)
+	vp_data := bytes.Replace(parts[constants.VALOR_PRESENTE_COL], comma_bytes, empty_space_bytes, -1)
+	va_data := bytes.Replace(parts[constants.VALOR_AQUISICAO_COL], comma_bytes, empty_space_bytes, -1)
 	nu_doc_data := parts[constants.NU_DOCUMENTO_COL]
 
-	line_data = []string{vn_data, vp_data, va_data, nu_doc_data, nome_cedente, doc_cedente, nome_sacado, doc_sacado}
+	line_data = [][]byte{vn_data, vp_data, va_data, nu_doc_data, nome_cedente, doc_cedente, nome_sacado, doc_sacado}
 
 	return line_data
 }
@@ -171,12 +176,12 @@ func ParseCSVFile(filepath string, map_statistics map[uint32]*DataFields, wg *sy
 	defer PutBufReader(bufReader, bufReaderPool)
 
 	lineNum := 0
-	line := ""
-	delimiter := ';'
+	var line []byte
+	delimiter := []byte(";")
 	eof_flag := false
 	for {
 		// Read line by line
-		line, err = bufReader.ReadString('\n')
+		line, err = bufReader.ReadBytes('\n')
 		if err != nil {
 			// If we reached the end of file, print the last line if not empty.
 			if err == io.EOF {
@@ -208,11 +213,11 @@ func ParseCSVFile(filepath string, map_statistics map[uint32]*DataFields, wg *sy
 		}
 
 		// Extracting Filters
-		nu_documento := line_data[3]
-		nome_cedente := line_data[4]
-		doc_cedente := line_data[5]
-		nome_sacado := line_data[6]
-		doc_sacado := line_data[7]
+		nu_documento := string(line_data[3])
+		nome_cedente := string(line_data[4])
+		doc_cedente := string(line_data[5])
+		nome_sacado := string(line_data[6])
+		doc_sacado := string(line_data[7])
 
 		// Filter map so we can loop through filters
 		if filterDocNum != "" && filterDocNum != nu_documento {
@@ -247,11 +252,11 @@ func ParseCSVFile(filepath string, map_statistics map[uint32]*DataFields, wg *sy
 			map_statistics[nu_documento_uint32].doc_sacado = doc_sacado
 		}
 
-		vn, err := strconv.ParseFloat(line_data[0], 32)
+		vn, err := strconv.ParseFloat(string(line_data[0]), 32)
 		check(err)
-		vp, err := strconv.ParseFloat(line_data[1], 32)
+		vp, err := strconv.ParseFloat(string(line_data[1]), 32)
 		check(err)
-		va, err := strconv.ParseFloat(line_data[2], 32)
+		va, err := strconv.ParseFloat(string(line_data[2]), 32)
 		check(err)
 
 		df.vn.ComputeStatistics(float32(vn))
