@@ -5,7 +5,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"io/fs"
 	"log"
 	"math"
 	_ "net/http/pprof" // Importing pprof to register debug handlers
@@ -20,8 +19,6 @@ import (
 	"bytes"
 )
 
-// Mutex for writing to the same map
-var mu sync.Mutex
 
 // Global debug flag
 var debug bool
@@ -47,6 +44,8 @@ func init() {
 
 	// Parse command-line flags early so that 'debug' is available to the rest of the program.
 	flag.Parse()
+	filterNomeCedente = strings.ToUpper(filterNomeCedente)
+	filterNomeSacado = strings.ToUpper(filterNomeSacado)
 }
 
 // STRUCT SIZE = 32bits * 4 = 16bytes
@@ -157,15 +156,32 @@ func GetCWD() string {
 	return exPath
 }
 
-func GetFilePathList(folder_path string) []fs.DirEntry {
+func GetFilePathList(folder_path string) []string {
 	entries, err := os.ReadDir(folder_path)
 	check(err)
-	return entries
+	var filenames []string
+	for _, entry := range entries{
+		if strings.Contains(entry.Name(), "Zone.Identifier") || !strings.HasSuffix(entry.Name(), ".csv") {
+			continue
+		}
+		filenames = append(filenames, entry.Name())
+	}
+	return filenames
 }
 
-func ParseCSVFile(filepath string, map_statistics map[uint32]*DataFields, wg *sync.WaitGroup, bufReaderPool *sync.Pool) {
+func ParseCSVFile(filepath string, results_channel chan<-map[uint32]*DataFields, wg *sync.WaitGroup, bufReaderPool *sync.Pool) {
+	if debug{
+		fmt.Printf("In ParseCSVFile: filepath: %s\n", filepath)
+	}
 	// Signal that this goroutine is done
 	defer wg.Done()
+
+	// Local map to avoid global mutex locks
+	local_map := make(map[uint32]*DataFields)
+	defer func() {
+        // Send local map to aggregator channel
+        results_channel <- local_map
+    }()
 
 	// Open File Ptr
 	filePtr, err := os.Open(filepath)
@@ -199,17 +215,14 @@ func ParseCSVFile(filepath string, map_statistics map[uint32]*DataFields, wg *sy
 			continue
 		}
 
-		if debug {
-			fmt.Printf("FILEPATH: %s\n\n", filepath)
-		}
 		line_data := FetchDataCols(line, delimiter)
 		if len(line_data) < 1 {
 			fmt.Printf("FILEPATH WITH LINE ERROR:\n %s\n\n", filepath)
 			continue
 		}
 
-		if debug {
-			fmt.Printf("\n\nData: %v\n\n", line_data)
+		if debug{
+			fmt.Printf("In ParseCSVFile: PART2 | filepath: %s\n linedata: %s\n", filepath, line_data)
 		}
 
 		// Extracting Filters
@@ -223,13 +236,13 @@ func ParseCSVFile(filepath string, map_statistics map[uint32]*DataFields, wg *sy
 		if filterDocNum != "" && filterDocNum != nu_documento {
 			continue
 		}
-		if filterNomeCedente != "" && strings.ToUpper(filterNomeCedente) != nome_cedente {
+		if filterNomeCedente != "" && filterNomeCedente != nome_cedente {
 			continue
 		}
 		if filterDocCedente != "" && filterDocCedente != doc_cedente {
 			continue
 		}
-		if filterNomeSacado != "" && strings.ToUpper(filterNomeSacado) != nome_sacado {
+		if filterNomeSacado != "" && filterNomeSacado != nome_sacado {
 			continue
 		}
 		if filterDocSacado != "" && filterDocSacado != doc_sacado {
@@ -240,16 +253,15 @@ func ParseCSVFile(filepath string, map_statistics map[uint32]*DataFields, wg *sy
 		nu_documento_uint, err := strconv.ParseUint(nu_documento, 10, 32)
 		check(err)
 		nu_documento_uint32 := uint32(nu_documento_uint)
-		mu.Lock()
-		df, exists := map_statistics[nu_documento_uint32]
+		df, exists := local_map[nu_documento_uint32]
 		if !exists {
 			df = &DataFields{}
 			df.SetInitialValues()
-			map_statistics[nu_documento_uint32] = df
-			map_statistics[nu_documento_uint32].nome_cedente = nome_cedente
-			map_statistics[nu_documento_uint32].doc_cedente = doc_cedente
-			map_statistics[nu_documento_uint32].nome_sacado = nome_sacado
-			map_statistics[nu_documento_uint32].doc_sacado = doc_sacado
+			local_map[nu_documento_uint32] = df
+			local_map[nu_documento_uint32].nome_cedente = nome_cedente
+			local_map[nu_documento_uint32].doc_cedente = doc_cedente
+			local_map[nu_documento_uint32].nome_sacado = nome_sacado
+			local_map[nu_documento_uint32].doc_sacado = doc_sacado
 		}
 
 		vn, err := strconv.ParseFloat(string(line_data[0]), 32)
@@ -262,7 +274,6 @@ func ParseCSVFile(filepath string, map_statistics map[uint32]*DataFields, wg *sy
 		df.vn.ComputeStatistics(float32(vn))
 		df.vp.ComputeStatistics(float32(vp))
 		df.va.ComputeStatistics(float32(va))
-		mu.Unlock()
 
 		lineNum += 1
 
@@ -315,6 +326,25 @@ func PutBufReader(br *bufio.Reader, bufReaderPool *sync.Pool) {
 	bufReaderPool.Put(br)
 }
 
+func MergeDataStatistics(global_ds *DataStatistics, local_ds *DataStatistics){
+	global_ds.sum += local_ds.sum
+	global_ds.num_records += local_ds.num_records
+
+	if local_ds.max > global_ds.max{
+		global_ds.max = local_ds.max
+	}
+
+	if local_ds.min < global_ds.min{
+		global_ds.min = local_ds.min
+	}
+}
+
+func MergeDataFields(global_df *DataFields, local_df *DataFields){
+	MergeDataStatistics(&global_df.vp, &local_df.vp)
+	MergeDataStatistics(&global_df.vn, &local_df.vn)
+	MergeDataStatistics(&global_df.va, &local_df.va)
+}
+
 func main() {
 	// Start time tracking
 	start := time.Now()
@@ -342,12 +372,6 @@ func main() {
 
 	filenames := GetFilePathList(folderPath)
 
-	// Creating my map data structure
-	// Key: ~32 bytes
-	// Value pointer: 8 bytes
-	// DataFields: 48 bytes
-	// Subtotal: 32 + 8 + 48 = 88 bytes per entry
-	mapStatistics := make(map[uint32]*DataFields)
 	var wg sync.WaitGroup
 
 	// Initializing a buffer syncPool
@@ -358,17 +382,38 @@ func main() {
 		},
 	}
 
+	// Starting a channel
+	results_channel := make(chan map[uint32]*DataFields, len(filenames))
+
 	for _, filename := range filenames {
-		if strings.Contains(filename.Name(), "Zone.Identifier") || !strings.HasSuffix(filename.Name(), ".csv") {
-			continue
-		}
 		wg.Add(1)
-		go ParseCSVFile(folderPath+"/"+filename.Name(), mapStatistics, &wg, &bufferPool)
+		go ParseCSVFile(folderPath+"/"+filename, results_channel, &wg, &bufferPool)
 	}
 
 	wg.Wait()
+	
+	// Creating my map data structure
+	// Key: ~32 bytes
+	// Value pointer: 8 bytes
+	// DataFields: 48 bytes
+	// Subtotal: 32 + 8 + 48 = 88 bytes per entry
+	// Merge all maps in channel into the main global_map
+	global_map := make(map[uint32]*DataFields)
+	for i := 0; i < len(filenames); i++ {
+		local_map := <-results_channel
+		// Merge local_map into global_map (with a single goroutine doing this, so no locking required)
+		for key, local_df := range local_map {
+			if global_df, exists := global_map[key]; exists {
+				// merge statistics (e.g., add sums, recompute min/max, update record counts)
+				MergeDataFields(global_df, local_df)
+			} else {
+				global_map[key] = local_df
+			}
+		}
+	}
 
-	GenerateOutputFile(mapStatistics)
+	// Outputing CSV file
+	GenerateOutputFile(global_map)
 
 	// Write Memory Profile at the END of execution
 	f, err := os.Create("mem_profile.pprof")
