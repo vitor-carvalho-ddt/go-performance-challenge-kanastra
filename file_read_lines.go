@@ -18,7 +18,17 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unsafe"
 )
+
+var uint16bufferPool = sync.Pool{
+	New: func() interface{} {
+		// Create a slice with length (and capacity) 53.
+		// Adjust length if you want to use it as a dynamic slice.
+		buf := make([]uint16, 53)
+		return &buf
+	},
+}
 
 // Mutex for writing to the same map
 var mu sync.Mutex
@@ -67,7 +77,7 @@ func byteArrayToInt(byteSlice []byte) (int, error) {
 	var result int
 	for _, b := range byteSlice {
 		if b < '0' || b > '9' {
-			return 0, fmt.Errorf("Invalid byte: %c", b)
+			return 0, fmt.Errorf("invalid byte: %c", b)
 		}
 		result = result*10 + int(b-'0')
 	}
@@ -128,7 +138,7 @@ func (ds *DataStatistics) ComputeStatistics(value float32) {
 
 func PrintDataRow(key uint32, df *DataFields) string {
 	var sb strings.Builder
-	sb.Grow(256)
+	sb.Grow(int(unsafe.Sizeof(key)) + int(unsafe.Sizeof(*df)))
 
 	fmt.Fprintf(&sb, "%d;%.2f;%.2f;%.2f;%.2f;", key, df.vn.sum, df.vn.sum/float32(df.vn.num_records), df.vn.max, df.vn.min)
 	fmt.Fprintf(&sb, "%.2f;%.2f;%.2f;%.2f;", df.vp.sum, df.vp.sum/float32(df.vp.num_records), df.vp.max, df.vp.min)
@@ -144,35 +154,51 @@ func check(e error) {
 	}
 }
 
-func FetchDataCols(line_bytes []byte, delimiter_bytes []byte) (line_data [][]byte) {
+func FetchDataCols(line_bytes []byte, delimiter_bytes []byte) ([]byte, []byte, []byte, []byte) {
+	// buffer
+	var nu_doc_data []byte
+	var vn_data []byte
+	var vp_data []byte
+	var va_data []byte
 
-	// Split text into parts
-	parts := bytes.Split(line_bytes, delimiter_bytes)
+	num_cols := 54 - 1 // 54 columns minus 1 from EOL
+	delimiter_positions := uint16bufferPool.Get().(*[]uint16)
+	dp := *delimiter_positions
+	dp = dp[:53]
+	// delimiter_positions := make([]uint16, num_cols)
 
-	// Validate that we have enough parts
-	if len(parts) < int(constants.NU_DOCUMENTO_COL)+1 {
-		return [][]byte{}
+	count := 0
+	for index := range line_bytes {
+		if line_bytes[index] == byte(';') {
+			dp[count] = uint16(index)
+			count++
+			if count > num_cols {
+				break
+			}
+		}
 	}
 
-	// Extracting Mainly Filter Fields
-	nome_cedente := parts[constants.NOME_CEDENTE_COL]
-	doc_cedente := parts[constants.DOC_CEDENTE_COL]
-	nome_sacado := parts[constants.NOME_SACADO_COL]
-	doc_sacado := parts[constants.DOC_SACADO_COL]
+	nu_doc_data = line_bytes[dp[constants.NU_DOCUMENTO_COL-1]+1 : dp[constants.NU_DOCUMENTO_COL]]
+	vn_data = line_bytes[dp[constants.VALOR_NOMINAL_COL-1]+1 : dp[constants.VALOR_NOMINAL_COL]]
+	vp_data = line_bytes[dp[constants.VALOR_PRESENTE_COL-1]+1 : dp[constants.VALOR_PRESENTE_COL]]
+	va_data = line_bytes[dp[constants.VALOR_AQUISICAO_COL-1]+1 : dp[constants.VALOR_AQUISICAO_COL]]
 
-	// Comma bytes
-	comma_bytes := []byte(",")
-	empty_space_bytes := []byte("")
+	uint16bufferPool.Put(delimiter_positions)
 
-	// Extract relevant fields
-	vn_data := bytes.Replace(parts[constants.VALOR_NOMINAL_COL], comma_bytes, empty_space_bytes, -1)
-	vp_data := bytes.Replace(parts[constants.VALOR_PRESENTE_COL], comma_bytes, empty_space_bytes, -1)
-	va_data := bytes.Replace(parts[constants.VALOR_AQUISICAO_COL], comma_bytes, empty_space_bytes, -1)
-	nu_doc_data := parts[constants.NU_DOCUMENTO_COL]
+	// testing
+	RemoveComma(vn_data)
+	RemoveComma(vp_data)
+	RemoveComma(va_data)
 
-	line_data = [][]byte{vn_data, vp_data, va_data, nu_doc_data, nome_cedente, doc_cedente, nome_sacado, doc_sacado}
+	// Split text into parts
+	// parts := bytes.Split(line_bytes, delimiter_bytes)
 
-	return line_data
+	// Validate that we have enough parts
+	if len(nu_doc_data) == 0 {
+		return []byte{}, []byte{}, []byte{}, []byte{}
+	}
+
+	return vn_data, vp_data, va_data, nu_doc_data
 }
 
 func GetCWD() string {
@@ -186,6 +212,24 @@ func GetFilePathList(folder_path string) []fs.DirEntry {
 	entries, err := os.ReadDir(folder_path)
 	check(err)
 	return entries
+}
+
+func RemoveComma(data []byte) {
+	data_len := len(data)
+	for index := range data {
+		if data[index] == byte(',') {
+			helper := index
+			for {
+				data[helper] = data[helper+1]
+				helper++
+				if helper >= data_len-1 {
+					data[helper] = byte('0')
+					data_len = len(data)
+					break
+				}
+			}
+		}
+	}
 }
 
 func ParseCSVFile(filepath string, map_statistics map[uint32]*DataFields, wg *sync.WaitGroup, bufReaderPool *sync.Pool) {
@@ -227,39 +271,31 @@ func ParseCSVFile(filepath string, map_statistics map[uint32]*DataFields, wg *sy
 		if debug {
 			fmt.Printf("FILEPATH: %s\n\n", filepath)
 		}
-		line_data := FetchDataCols(line, delimiter)
-		if len(line_data) < 1 {
+
+		vn_data, vp_data, va_data, nu_documento := FetchDataCols(line, delimiter)
+
+		if len(nu_documento) < 1 {
 			fmt.Printf("FILEPATH WITH LINE ERROR:\n %s\n\n", filepath)
 			continue
 		}
-
-		if debug {
-			fmt.Printf("\n\nData: %v\n\n", line_data)
-		}
-
-		// Extracting Filters
-		nu_documento := line_data[3]
-		nome_cedente := line_data[4]
-		doc_cedente := line_data[5]
-		nome_sacado := line_data[6]
-		doc_sacado := line_data[7]
 
 		// Filter map so we can loop through filters
 		if !bytes.Equal(filterDocNum, []byte("")) && !bytes.Equal(filterDocNum, nu_documento) {
 			continue
 		}
-		if !bytes.Equal(filterNomeCedente, []byte("")) && !bytes.Equal(filterNomeCedente, nome_cedente) {
-			continue
-		}
-		if !bytes.Equal(filterDocCedente, []byte("")) && !bytes.Equal(filterDocCedente, doc_cedente) {
-			continue
-		}
-		if !bytes.Equal(filterNomeSacado, []byte("")) && !bytes.Equal(filterNomeSacado, nome_sacado) {
-			continue
-		}
-		if !bytes.Equal(filterDocSacado, []byte("")) && !bytes.Equal(filterDocSacado, doc_sacado) {
-			continue
-		}
+
+		// if !bytes.Equal(filterNomeCedente, []byte("")) && !bytes.Equal(filterNomeCedente, nome_cedente) {
+		// 	continue
+		// }
+		// if !bytes.Equal(filterDocCedente, []byte("")) && !bytes.Equal(filterDocCedente, doc_cedente) {
+		// 	continue
+		// }
+		// if !bytes.Equal(filterNomeSacado, []byte("")) && !bytes.Equal(filterNomeSacado, nome_sacado) {
+		// 	continue
+		// }
+		// if !bytes.Equal(filterDocSacado, []byte("")) && !bytes.Equal(filterDocSacado, doc_sacado) {
+		// 	continue
+		// }
 
 		// Lock before modifying the shared structure
 		nu_documento_int, err := byteArrayToInt(nu_documento)
@@ -271,17 +307,13 @@ func ParseCSVFile(filepath string, map_statistics map[uint32]*DataFields, wg *sy
 			df = &DataFields{}
 			df.SetInitialValues()
 			map_statistics[nu_documento_uint32] = df
-			// map_statistics[nu_documento_uint32].nome_cedente = nome_cedente
-			// map_statistics[nu_documento_uint32].doc_cedente = doc_cedente
-			// map_statistics[nu_documento_uint32].nome_sacado = nome_sacado
-			// map_statistics[nu_documento_uint32].doc_sacado = doc_sacado
 		}
 
-		vn, err := strconv.ParseFloat(string(line_data[0]), 32)
+		vn, err := strconv.ParseFloat(string(vn_data), 32)
 		check(err)
-		vp, err := strconv.ParseFloat(string(line_data[1]), 32)
+		vp, err := strconv.ParseFloat(string(vp_data), 32)
 		check(err)
-		va, err := strconv.ParseFloat(string(line_data[2]), 32)
+		va, err := strconv.ParseFloat(string(va_data), 32)
 		check(err)
 
 		df.vn.ComputeStatistics(float32(vn))
