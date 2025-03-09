@@ -153,7 +153,6 @@ func FetchDataCols(line_bytes []byte, delimiter_bytes []byte) ([]byte, []byte, [
 	delimiter_positions := uint16bufferPool.Get().(*[]uint16)
 	dp := *delimiter_positions
 	dp = dp[:53]
-	// delimiter_positions := make([]uint16, num_cols)
 
 	count := 0
 	for index := range line_bytes {
@@ -178,10 +177,8 @@ func FetchDataCols(line_bytes []byte, delimiter_bytes []byte) ([]byte, []byte, [
 	RemoveComma(vp_data)
 	RemoveComma(va_data)
 
-	// Split text into parts
 	// parts := bytes.Split(line_bytes, delimiter_bytes)
 
-	// Validate that we have enough parts
 	if len(nu_doc_data) == 0 {
 		return []byte{}, []byte{}, []byte{}, []byte{}
 	}
@@ -220,7 +217,7 @@ func RemoveComma(data []byte) {
 	}
 }
 
-func ParseCSVFile(filepath string, map_statistics map[uint32]*DataFields, wg *sync.WaitGroup, bufReaderPool *sync.Pool) {
+func ParseCSVFile(filepath string, map_statistics map[uint32]*DataFields, wg *sync.WaitGroup) {
 	// Signal that this goroutine is done
 	defer wg.Done()
 
@@ -228,9 +225,10 @@ func ParseCSVFile(filepath string, map_statistics map[uint32]*DataFields, wg *sy
 	filePtr, err := os.Open(filepath)
 	check(err)
 	defer filePtr.Close()
+
 	// Counting Lines in the file
-	bufReader := GetBufReader(filePtr, bufReaderPool)
-	defer PutBufReader(bufReader, bufReaderPool)
+	bufferSize := 4 * 1024 // 4Kb
+	bufReader := bufio.NewReaderSize(filePtr, bufferSize)
 
 	lineNum := 0
 	var line []byte
@@ -368,41 +366,25 @@ func GenerateOutputFile(map_statistics map[uint32]*DataFields) {
 	runtime.GC()
 }
 
-// GetBufReader retrieves a *bufio.Reader from the pool and resets it with the provided reader.
-func GetBufReader(r io.Reader, bufReaderPool *sync.Pool) *bufio.Reader {
-	br := bufReaderPool.Get().(*bufio.Reader)
-	br.Reset(r) // Reset attaches the new reader to the buffered reader.
-	return br
-}
-
-// PutBufReader returns a *bufio.Reader back to the pool after use.
-func PutBufReader(br *bufio.Reader, bufReaderPool *sync.Pool) {
-	// Optionally, you might want to clear or discard any buffered data.
-	br.Reset(nil)
-	bufReaderPool.Put(br)
-}
-
 func main() {
 	// Start time tracking
 	start := time.Now()
-	// Create file to store CPU profile
+
+	// Start CPU profiling
 	cpuProfileFile, err := os.Create("cpu_profile.pprof")
 	if err != nil {
 		log.Fatal("could not create CPU profile: ", err)
 	}
 	defer cpuProfileFile.Close()
 
-	// Start CPU profiling
 	if err := pprof.StartCPUProfile(cpuProfileFile); err != nil {
 		log.Fatal("could not start CPU profile: ", err)
 	}
-	// Ensure profiling is stopped when main finishes
 	defer pprof.StopCPUProfile()
 
 	cwd := GetCWD()
 	folderPath := cwd + "/files"
 
-	// Check if folder exists before proceeding
 	if _, err := os.Stat(folderPath); os.IsNotExist(err) {
 		log.Fatalf("Error: Folder %s does not exist.\n", folderPath)
 	}
@@ -410,46 +392,36 @@ func main() {
 	filenames := GetFilePathList(folderPath)
 
 	// Creating my map data structure
-	// Key: ~32 bytes
+	// Key: ~4 bytes
 	// Value pointer: 8 bytes
 	// DataFields: 48 bytes
-	// Subtotal: 32 + 8 + 48 = 88 bytes per entry
+	// Subtotal: 4 + 8 + 48 = 60 bytes per entry
 	mapStatistics := make(map[uint32]*DataFields)
 	var wg sync.WaitGroup
-
-	// Initializing a buffer syncPool
-	bufferSize := 64 * 1024 // 64Kb
-	bufferPool := sync.Pool{
-		New: func() interface{} {
-			return bufio.NewReaderSize(nil, bufferSize)
-		},
-	}
 
 	for _, filename := range filenames {
 		if strings.Contains(filename.Name(), "Zone.Identifier") || !strings.HasSuffix(filename.Name(), ".csv") {
 			continue
 		}
 		wg.Add(1)
-		go ParseCSVFile(folderPath+"/"+filename.Name(), mapStatistics, &wg, &bufferPool)
+		go ParseCSVFile(folderPath+"/"+filename.Name(), mapStatistics, &wg)
 	}
 
 	wg.Wait()
 
 	GenerateOutputFile(mapStatistics)
 
-	// Write Memory Profile at the END of execution
+	// Memory Profiling
 	f, err := os.Create("mem_profile.pprof")
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer f.Close()
 
-	// Write the memory profile after processing
 	if err := pprof.WriteHeapProfile(f); err != nil {
 		log.Fatal(err)
 	}
 
-	// Print total execution time
 	elapsed := time.Since(start)
 	fmt.Printf("Execution Time: %s\n", elapsed)
 }
