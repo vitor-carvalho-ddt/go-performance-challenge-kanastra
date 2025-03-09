@@ -13,12 +13,12 @@ import (
 	"os"
 	"path/filepath"
 	"requirements/constants"
+	"runtime"
 	"runtime/pprof"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
-	"unsafe"
 )
 
 var uint16bufferPool = sync.Pool{
@@ -134,18 +134,6 @@ func (ds *DataStatistics) ComputeStatistics(value float32) {
 	if value < ds.min {
 		ds.min = value
 	}
-}
-
-func PrintDataRow(key uint32, df *DataFields) string {
-	var sb strings.Builder
-	sb.Grow(int(unsafe.Sizeof(key)) + int(unsafe.Sizeof(*df)))
-
-	fmt.Fprintf(&sb, "%d;%.2f;%.2f;%.2f;%.2f;", key, df.vn.sum, df.vn.sum/float32(df.vn.num_records), df.vn.max, df.vn.min)
-	fmt.Fprintf(&sb, "%.2f;%.2f;%.2f;%.2f;", df.vp.sum, df.vp.sum/float32(df.vp.num_records), df.vp.max, df.vp.min)
-	fmt.Fprintf(&sb, "%.2f;%.2f;%.2f;%.2f\n", df.va.sum, df.va.sum/float32(df.va.num_records), df.va.max, df.va.min)
-	// fmt.Fprintf(&sb, "%s;%s;%s;%s\n", string(df.nome_cedente[:]), string(df.doc_cedente[:]), string(df.nome_sacado[:]), string(df.doc_sacado[:]))
-
-	return sb.String()
 }
 
 func check(e error) {
@@ -329,6 +317,26 @@ func ParseCSVFile(filepath string, map_statistics map[uint32]*DataFields, wg *sy
 	}
 }
 
+func WriteDataRow(w io.Writer, key uint32, df *DataFields) error {
+	// Write the first set of values
+	if _, err := fmt.Fprintf(w, "%d;%.2f;%.2f;%.2f;%.2f;",
+		key,
+		df.vn.sum, df.vn.sum/float32(df.vn.num_records), df.vn.max, df.vn.min); err != nil {
+		return err
+	}
+	// Write the second set of values
+	if _, err := fmt.Fprintf(w, "%.2f;%.2f;%.2f;%.2f;",
+		df.vp.sum, df.vp.sum/float32(df.vp.num_records), df.vp.max, df.vp.min); err != nil {
+		return err
+	}
+	// Write the third set of values and a newline
+	if _, err := fmt.Fprintf(w, "%.2f;%.2f;%.2f;%.2f\n",
+		df.va.sum, df.va.sum/float32(df.va.num_records), df.va.max, df.va.min); err != nil {
+		return err
+	}
+	return nil
+}
+
 func GenerateOutputFile(map_statistics map[uint32]*DataFields) {
 	// Creating dir if not exists
 	err := os.MkdirAll("output", 0755)
@@ -349,14 +357,15 @@ func GenerateOutputFile(map_statistics map[uint32]*DataFields) {
 	writer.WriteString(col_names)
 	writer.Flush()
 
-	var data_str string
 	for key, df := range map_statistics {
-		data_str = PrintDataRow(key, df)
-		_, err = filePtr.WriteString(data_str)
+		err = WriteDataRow(writer, key, df)
 		check(err)
 	}
 
 	writer.Flush()
+
+	// OPTIONAL: Run GC before profiling (useful in some cases)
+	runtime.GC()
 }
 
 // GetBufReader retrieves a *bufio.Reader from the pool and resets it with the provided reader.
@@ -434,9 +443,6 @@ func main() {
 		log.Fatal(err)
 	}
 	defer f.Close()
-
-	// OPTIONAL: Run GC before profiling (useful in some cases)
-	// runtime.GC()
 
 	// Write the memory profile after processing
 	if err := pprof.WriteHeapProfile(f); err != nil {
