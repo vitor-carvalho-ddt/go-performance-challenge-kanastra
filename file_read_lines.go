@@ -23,8 +23,7 @@ import (
 
 var uint16bufferPool = sync.Pool{
 	New: func() interface{} {
-		// Create a slice with length (and capacity) 53.
-		// Adjust length if you want to use it as a dynamic slice.
+		// Create a slice with length (and capacity) 53. (54 columns, 53 ;)
 		buf := make([]uint16, 53)
 		return &buf
 	},
@@ -62,10 +61,8 @@ func init() {
 	// Filter by Doc Sacado | Example: 066.407.504-57
 	flag.StringVar(&filterDocSacadoString, "docsacado", "", "Filter by a specific document Sacado document")
 
-	// Parse command-line flags early so that 'debug' is available to the rest of the program.
 	flag.Parse()
 
-	// Convert all variables to []byte as required
 	filterDocNum = []byte(filterDocNumString)
 	filterNomeCedente = []byte(strings.ToUpper(filterNomeCedenteString))
 	filterDocCedente = []byte(filterDocCedenteString)
@@ -123,7 +120,6 @@ func (df *DataFields) SetInitialValues() {
 }
 
 func (ds *DataStatistics) ComputeStatistics(value float32) {
-	// Adding value to sum
 	ds.sum += value
 	ds.num_records += 1
 
@@ -172,7 +168,7 @@ func FetchDataCols(line_bytes []byte, delimiter_bytes []byte) ([]byte, []byte, [
 
 	uint16bufferPool.Put(delimiter_positions)
 
-	// testing
+	// testing my own function (removes ; inplace)
 	RemoveComma(vn_data)
 	RemoveComma(vp_data)
 	RemoveComma(va_data)
@@ -315,34 +311,52 @@ func ParseCSVFile(filepath string, map_statistics map[uint32]*DataFields, wg *sy
 	}
 }
 
-func WriteDataRow(w io.Writer, key uint32, df *DataFields) error {
-	// Write the first set of values
-	if _, err := fmt.Fprintf(w, "%d;%.2f;%.2f;%.2f;%.2f;",
-		key,
-		df.vn.sum, df.vn.sum/float32(df.vn.num_records), df.vn.max, df.vn.min); err != nil {
-		return err
-	}
-	// Write the second set of values
-	if _, err := fmt.Fprintf(w, "%.2f;%.2f;%.2f;%.2f;",
-		df.vp.sum, df.vp.sum/float32(df.vp.num_records), df.vp.max, df.vp.min); err != nil {
-		return err
-	}
-	// Write the third set of values and a newline
-	if _, err := fmt.Fprintf(w, "%.2f;%.2f;%.2f;%.2f\n",
-		df.va.sum, df.va.sum/float32(df.va.num_records), df.va.max, df.va.min); err != nil {
-		return err
-	}
-	return nil
+func WriteDataRowNew(b []byte, w io.Writer, key uint32, df *DataFields) error {
+	// Append key and separator.
+	b = strconv.AppendUint(b, uint64(key), 10)
+	separator := byte(',')
+	b = append(b, separator)
+
+	// Append "vn" values.
+	b = strconv.AppendFloat(b, float64(df.vn.sum), 'f', -1, 32)
+	b = append(b, separator)
+	b = strconv.AppendFloat(b, float64(df.vn.sum)/float64(df.vn.num_records), 'f', -1, 32)
+	b = append(b, separator)
+	b = strconv.AppendFloat(b, float64(df.vn.max), 'f', -1, 32)
+	b = append(b, separator)
+	b = strconv.AppendFloat(b, float64(df.vn.min), 'f', -1, 32)
+	b = append(b, separator)
+
+	// Append "vp" values.
+	b = strconv.AppendFloat(b, float64(df.vp.sum), 'f', -1, 32)
+	b = append(b, separator)
+	b = strconv.AppendFloat(b, float64(df.vp.sum)/float64(df.vp.num_records), 'f', -1, 32)
+	b = append(b, separator)
+	b = strconv.AppendFloat(b, float64(df.vp.max), 'f', -1, 32)
+	b = append(b, separator)
+	b = strconv.AppendFloat(b, float64(df.vp.min), 'f', -1, 32)
+	b = append(b, separator)
+
+	// Append "va" values.
+	b = strconv.AppendFloat(b, float64(df.va.sum), 'f', -1, 32)
+	b = append(b, separator)
+	b = strconv.AppendFloat(b, float64(df.va.sum)/float64(df.va.num_records), 'f', -1, 32)
+	b = append(b, separator)
+	b = strconv.AppendFloat(b, float64(df.va.max), 'f', -1, 32)
+	b = append(b, separator)
+	b = strconv.AppendFloat(b, float64(df.va.min), 'f', -1, 32)
+	b = append(b, '\n')
+
+	// Write the complete row at once.
+	_, err := w.Write(b)
+	return err
 }
 
 func GenerateOutputFile(map_statistics map[uint32]*DataFields) {
-	// Creating dir if not exists
 	err := os.MkdirAll("output", 0755)
 	check(err)
 	// Build new file
 	output_filename := "output/calculations.csv"
-	// Open the file with the flags: append, create if not exists, and write only.
-	// The permission 0644 means the owner can read/write, and others can read.
 	filePtr, err := os.OpenFile(output_filename, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 	check(err)
 	defer filePtr.Close()
@@ -351,18 +365,19 @@ func GenerateOutputFile(map_statistics map[uint32]*DataFields) {
 	writer := bufio.NewWriter(filePtr)
 
 	// Write to file
-	col_names := "NU_DOCUMENTO;VN_SOMA;VN_MEDIA;VN_MAX;VN_MIN;VP_SOMA;VP_MEDIA;VP_MAX;VP_MIN;VA_SOMA;VA_MEDIA;VA_MAX;VA_MIN\n" //;NOME_CEDENTE;DOC_CEDENTE;NOME_SACADO;DOC_SACADO\n"
+	col_names := "NU_DOCUMENTO,VN_SOMA,VN_MEDIA,VN_MAX,VN_MIN,VP_SOMA,VP_MEDIA,VP_MAX,VP_MIN,VA_SOMA,VA_MEDIA,VA_MAX,VA_MIN\n" //,NOME_CEDENTE,DOC_CEDENTE,NOME_SACADO,DOC_SACADO\n"
 	writer.WriteString(col_names)
 	writer.Flush()
 
+	var buf [256]byte
+	b := buf[:0]
 	for key, df := range map_statistics {
-		err = WriteDataRow(writer, key, df)
+		err = WriteDataRowNew(b, writer, key, df)
 		check(err)
 	}
 
 	writer.Flush()
 
-	// OPTIONAL: Run GC before profiling (useful in some cases)
 	runtime.GC()
 }
 
@@ -395,7 +410,7 @@ func main() {
 	// Key: ~4 bytes
 	// Value pointer: 8 bytes
 	// DataFields: 48 bytes
-	// Subtotal: 4 + 8 + 48 = 60 bytes per entry
+	// Subtotal: 4 + 8 + 48 ~ 60 bytes per entry
 	mapStatistics := make(map[uint32]*DataFields)
 	var wg sync.WaitGroup
 
@@ -423,5 +438,5 @@ func main() {
 	}
 
 	elapsed := time.Since(start)
-	fmt.Printf("Execution Time: %s\n", elapsed)
+	fmt.Printf("Execution Time: %s\nDone!", elapsed)
 }
