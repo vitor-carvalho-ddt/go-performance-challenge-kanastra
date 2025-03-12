@@ -262,10 +262,7 @@ func ParseFloat32(b []byte) (float32, error) {
     return float32(result), nil
 }
 
-func ParseCSVFile(filepath string, map_statistics map[uint32]*DataFields, wg *sync.WaitGroup) {
-	// Signal that this goroutine is done
-	defer wg.Done()
-
+func ParseCSVFile(filepath string, map_statistics map[uint32]*DataFields) {
 	// Open File Ptr
 	filePtr, err := os.Open(filepath)
 	check(err)
@@ -453,7 +450,16 @@ func main() {
 		log.Fatalf("Error: Folder %s does not exist.\n", folderPath)
 	}
 
-	filenames := GetFilePathList(folderPath)
+	entries := GetFilePathList(folderPath)
+
+	// Filter CSV files first
+    var filenames []string
+    for _, entry := range entries {
+        name := entry.Name()
+        if !strings.Contains(name, "Zone.Identifier") && strings.HasSuffix(name, ".csv") {
+            filenames = append(filenames, folderPath+"/"+name)
+        }
+    }
 
 	// Creating my map data structure
 	// Key: ~4 bytes
@@ -461,16 +467,28 @@ func main() {
 	// DataFields: 48 bytes
 	// Subtotal: 4 + 8 + 48 ~ 60 bytes per entry
 	mapStatistics := make(map[uint32]*DataFields)
+	// Create a channel to distribute work
+    filesChan := make(chan string, len(filenames))
 	var wg sync.WaitGroup
+	// Determine number of workers
+    numWorkers := runtime.NumCPU()
 
-	for _, filename := range filenames {
-		if strings.Contains(filename.Name(), "Zone.Identifier") || !strings.HasSuffix(filename.Name(), ".csv") {
-			continue
-		}
+	for i:=0; i<numWorkers; i++{
 		wg.Add(1)
-		go ParseCSVFile(folderPath+"/"+filename.Name(), mapStatistics, &wg)
+		go func() {
+			defer wg.Done()
+
+			for filename := range filesChan {
+				ParseCSVFile(filename, mapStatistics)
+			}
+		}()
 	}
 
+	// Feed files into the channel
+    for _, filename := range filenames {
+        filesChan <- filename
+    }
+    close(filesChan)
 	wg.Wait()
 
 	GenerateOutputFile(mapStatistics)
