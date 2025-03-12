@@ -29,6 +29,34 @@ var uint16bufferPool = sync.Pool{
 	},
 }
 
+// Create a pool for DataFields objects
+var dataFieldsPool = sync.Pool{
+    New: func() interface{} {
+        df := &DataFields{}
+        return df
+    },
+}
+
+func preAllocateDataFieldsPool(poolsize int) {
+    temps := make([]*DataFields, 0, poolsize)
+    
+    for i := 0; i < poolsize; i++ {
+        temps = append(temps, dataFieldsPool.Get().(*DataFields))
+    }
+    
+    for _, df := range temps {
+        putDataField(df)
+    }
+}
+
+func getDataField() *DataFields {
+    return dataFieldsPool.Get().(*DataFields)
+}
+
+func putDataField(df *DataFields) {
+    dataFieldsPool.Put(df)
+}
+
 // Mutex for writing to the same map
 var mu sync.Mutex
 
@@ -109,14 +137,20 @@ type DataFields struct {
 }
 
 func (df *DataFields) SetInitialValues() {
-	df.vn.setMax(float32(math.Inf(-1)))
-	df.vn.setMin(float32(math.Inf(1)))
+	df.vn.sum = 0
+	df.vn.num_records = 0
+	df.vn.max = float32(math.Inf(-1))
+	df.vn.min = float32(math.Inf(1))
 
-	df.vp.setMax(float32(math.Inf(-1)))
-	df.vp.setMin(float32(math.Inf(1)))
+	df.vp.sum = 0
+	df.vp.num_records = 0
+	df.vp.max = float32(math.Inf(-1))
+	df.vp.min = float32(math.Inf(1))
 
-	df.va.setMax(float32(math.Inf(-1)))
-	df.va.setMin(float32(math.Inf(1)))
+	df.va.sum = 0
+	df.va.num_records = 0
+	df.va.max = float32(math.Inf(-1))
+	df.va.min = float32(math.Inf(1))
 }
 
 func (ds *DataStatistics) ComputeStatistics(value float32) {
@@ -136,6 +170,36 @@ func check(e error) {
 	if e != nil {
 		panic(e)
 	}
+}
+
+func FetchDocNum(line_bytes []byte, delimiter_bytes []byte) ([]byte) {
+	// buffer
+	var nu_doc_data []byte
+
+	num_cols := 54 - 1 // 54 columns minus 1 from EOL
+	delimiter_positions := uint16bufferPool.Get().(*[]uint16)
+	dp := *delimiter_positions
+	dp = dp[:53]
+
+	count := 0
+	for index := range line_bytes {
+		if line_bytes[index] == byte(';') {
+			dp[count] = uint16(index)
+			count++
+			if count > num_cols {
+				break
+			}
+		}
+	}
+
+	nu_doc_data = line_bytes[dp[constants.NU_DOCUMENTO_COL-1]+1 : dp[constants.NU_DOCUMENTO_COL]]
+	uint16bufferPool.Put(delimiter_positions)
+
+	if len(nu_doc_data) == 0 {
+		return []byte{}
+	}
+
+	return nu_doc_data
 }
 
 func FetchDataCols(line_bytes []byte, delimiter_bytes []byte) ([]byte, []byte, []byte, []byte) {
@@ -262,7 +326,70 @@ func ParseFloat32(b []byte) (float32, error) {
     return float32(result), nil
 }
 
-func ParseCSVFile(filepath string, map_statistics map[uint32]*DataFields) {
+func GenerateKeysBuffer(filepath string, keybuffer_map map[uint32]uint32){
+	// Open File Ptr
+	filePtr, err := os.Open(filepath)
+	check(err)
+	defer filePtr.Close()
+
+	// Counting Lines in the file
+	bufferSize := 4 * 1024 // 4Kb
+	bufReader := bufio.NewReaderSize(filePtr, bufferSize)
+
+	lineNum := 0
+	var line []byte
+	delimiter := []byte(";")
+	eof_flag := false
+	for {
+		// Read line by line
+		line, err = bufReader.ReadSlice('\n')
+		if err != nil {
+			// If we reached the end of file, print the last line if not empty.
+			if err == io.EOF {
+				if len(line) > 0 {
+					eof_flag = true
+				}
+				break
+			}
+			fmt.Printf("Error reading line: %v\n", err)
+			break
+		}
+		// Skipping column names
+		if lineNum == 0 {
+			lineNum++
+			continue
+		}
+
+		if debug {
+			fmt.Printf("FILEPATH: %s\n\n", filepath)
+		}
+
+		nu_documento := FetchDocNum(line, delimiter)
+
+		if len(nu_documento) < 1 {
+			fmt.Printf("FILEPATH WITH LINE ERROR:\n %s\n\n", filepath)
+			continue
+		}
+
+		// Lock before modifying the shared structure
+		nu_documento_int, err := byteArrayToInt(nu_documento)
+		check(err)
+		nu_documento_uint32 := uint32(nu_documento_int)
+		mu.Lock()
+		_, exists := keybuffer_map[nu_documento_uint32]
+		if !exists {
+			keybuffer_map[nu_documento_uint32] = 0
+		}
+		keybuffer_map[nu_documento_uint32]++
+		mu.Unlock()
+		lineNum += 1
+		if eof_flag {
+			break
+		}
+	}
+}
+
+func ParseCSVFile(filepath string, map_statistics map[uint32]*DataFields, keybuffer_map map[uint32]uint32, max_nu_doc_per_parse int) {
 	// Open File Ptr
 	filePtr, err := os.Open(filepath)
 	check(err)
@@ -329,11 +456,28 @@ func ParseCSVFile(filepath string, map_statistics map[uint32]*DataFields) {
 		nu_documento_int, err := byteArrayToInt(nu_documento)
 		check(err)
 		nu_documento_uint32 := uint32(nu_documento_int)
+
 		mu.Lock()
+		_, exists := keybuffer_map[nu_documento_uint32]
+		if !exists{
+			mu.Unlock()
+			if eof_flag {
+				break
+			}
+			continue
+		}
+
 		df, exists := map_statistics[nu_documento_uint32]
 		if !exists {
-			df = &DataFields{}
-			df.SetInitialValues()
+			if len(map_statistics) >= max_nu_doc_per_parse{
+				mu.Unlock()
+				if eof_flag {
+					break
+				}
+				continue
+			}
+			df = getDataField()
+	    	df.SetInitialValues()
 			map_statistics[nu_documento_uint32] = df
 		}
 
@@ -347,6 +491,12 @@ func ParseCSVFile(filepath string, map_statistics map[uint32]*DataFields) {
 		df.vn.ComputeStatistics(float32(vn))
 		df.vp.ComputeStatistics(float32(vp))
 		df.va.ComputeStatistics(float32(va))
+
+		keybuffer_map[nu_documento_uint32]--
+		if keybuffer_map[nu_documento_uint32] == 0{
+			delete(keybuffer_map, nu_documento_uint32)
+		}
+
 		mu.Unlock()
 
 		lineNum += 1
@@ -357,7 +507,7 @@ func ParseCSVFile(filepath string, map_statistics map[uint32]*DataFields) {
 	}
 }
 
-func WriteDataRowNew(b []byte, w io.Writer, key uint32, df *DataFields) error {
+func WriteDataRow(b []byte, w io.Writer, key uint32, df *DataFields) error {
 	// Append key and separator.
 	b = strconv.AppendUint(b, uint64(key), 10)
 	separator := byte(',')
@@ -398,27 +548,35 @@ func WriteDataRowNew(b []byte, w io.Writer, key uint32, df *DataFields) error {
 	return err
 }
 
-func GenerateOutputFile(map_statistics map[uint32]*DataFields) {
+func GenerateOutputFile(map_statistics map[uint32]*DataFields, tag int) {
 	err := os.MkdirAll("output", 0755)
 	check(err)
 	// Build new file
+	var write_mode int
+	if tag == 1{
+		write_mode = os.O_TRUNC
+	}else{
+		write_mode = os.O_APPEND
+	}
 	output_filename := "output/calculations.csv"
-	filePtr, err := os.OpenFile(output_filename, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+	filePtr, err := os.OpenFile(output_filename, os.O_CREATE|os.O_WRONLY|write_mode, 0644)
 	check(err)
 	defer filePtr.Close()
 
 	// Use buffered writer
 	writer := bufio.NewWriter(filePtr)
 
-	// Write to file
-	col_names := "NU_DOCUMENTO,VN_SOMA,VN_MEDIA,VN_MAX,VN_MIN,VP_SOMA,VP_MEDIA,VP_MAX,VP_MIN,VA_SOMA,VA_MEDIA,VA_MAX,VA_MIN\n" //,NOME_CEDENTE,DOC_CEDENTE,NOME_SACADO,DOC_SACADO\n"
-	writer.WriteString(col_names)
-	writer.Flush()
+	if tag == 1{
+		// Write to file
+		col_names := "NU_DOCUMENTO,VN_SOMA,VN_MEDIA,VN_MAX,VN_MIN,VP_SOMA,VP_MEDIA,VP_MAX,VP_MIN,VA_SOMA,VA_MEDIA,VA_MAX,VA_MIN\n" //,NOME_CEDENTE,DOC_CEDENTE,NOME_SACADO,DOC_SACADO\n"
+		writer.WriteString(col_names)
+		writer.Flush()
+	}
 
 	var buf [256]byte
 	b := buf[:0]
 	for key, df := range map_statistics {
-		err = WriteDataRowNew(b, writer, key, df)
+		err = WriteDataRow(b, writer, key, df)
 		check(err)
 	}
 
@@ -461,25 +619,23 @@ func main() {
         }
     }
 
-	// Creating my map data structure
-	// Key: ~4 bytes
-	// Value pointer: 8 bytes
-	// DataFields: 48 bytes
-	// Subtotal: 4 + 8 + 48 ~ 60 bytes per entry
-	mapStatistics := make(map[uint32]*DataFields)
 	// Create a channel to distribute work
     filesChan := make(chan string, len(filenames))
 	var wg sync.WaitGroup
+
 	// Determine number of workers
     numWorkers := runtime.NumCPU()
+	fmt.Printf("Max Workers: %d\n", numWorkers)
 
+	keybuffer_map := make(map[uint32]uint32, 1000000)
+	// First pass generate keybuffer_map
 	for i:=0; i<numWorkers; i++{
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 
 			for filename := range filesChan {
-				ParseCSVFile(filename, mapStatistics)
+				GenerateKeysBuffer(filename, keybuffer_map)
 			}
 		}()
 	}
@@ -491,7 +647,54 @@ func main() {
     close(filesChan)
 	wg.Wait()
 
-	GenerateOutputFile(mapStatistics)
+	// Creating my map data structure
+	// Key: ~4 bytes
+	// Value pointer: 8 bytes
+	// DataFields: 48 bytes
+	// Subtotal: 4 + 8 + 48 ~ 60 bytes per entry
+	// Reopening channel
+    filesChanProc := make(chan string, len(filenames))
+	max_nu_doc_per_parse := 50000
+	map_statistics := make(map[uint32]*DataFields, max_nu_doc_per_parse)
+	preAllocateDataFieldsPool(max_nu_doc_per_parse)
+	
+	buf_len := len(keybuffer_map)
+	c := 1
+	for {
+		fmt.Printf("Round: %d\n", c)
+		if buf_len <= 0{
+			break
+		}
+		for i:=0; i<numWorkers; i++{
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for filename := range filesChanProc {
+					ParseCSVFile(filename, map_statistics, keybuffer_map, max_nu_doc_per_parse)
+				}
+			}()
+		}
+		
+		// Feed files into the channel
+ 	  	for _, filename := range filenames {
+ 	  	    filesChanProc <- filename
+ 	  	}
+    	close(filesChanProc)
+		wg.Wait()
+		GenerateOutputFile(map_statistics, c)
+		// iterate through each key to delete
+		for key, df := range map_statistics {
+			putDataField(df)
+			delete(map_statistics, key)
+		}
+		buf_len = len(keybuffer_map)
+		filesChanProc = make(chan string, len(filenames))
+		c++
+	}
+
+	// Final GC Overhead
+	runtime.GC()
+
 
 	// Memory Profiling
 	f, err := os.Create("mem_profile.pprof")
