@@ -197,19 +197,21 @@ func GetFilePathList(folder_path string) []fs.DirEntry {
 
 func RemoveComma(data []byte) {
 	data_len := len(data)
-	for index := range data {
-		if data[index] == byte(',') {
-			helper := index
-			for {
-				data[helper] = data[helper+1]
-				helper++
-				if helper >= data_len-1 {
-					data[helper] = byte('0')
-					data_len = len(data)
-					break
-				}
-			}
+	if data_len == 0{
+		return
+	}
+
+	write_index := 0
+
+	for read_index := range data {
+		if data[read_index] != byte(',') {
+			data[write_index] = data[read_index]
+			write_index++
 		}
+	}
+
+	for i := write_index; i < data_len; i++{
+		data[i] = '0'
 	}
 }
 
