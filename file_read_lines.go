@@ -215,6 +215,53 @@ func RemoveComma(data []byte) {
 	}
 }
 
+func ParseFloat32(b []byte) (float32, error) {
+    if len(b) == 0 {
+        return 0, fmt.Errorf("empty byte slice")
+    }
+
+    var result float64
+    var isNegative bool
+    var decimalPos int = -1
+    var i int
+
+    if b[0] == '-' {
+        isNegative = true
+        i = 1
+    } else if b[0] == '+' {
+        i = 1
+    }
+
+    // Process digits
+    for ; i < len(b); i++ {
+        if b[i] == '.' {
+            if decimalPos >= 0 {
+                return 0, fmt.Errorf("multiple decimal points")
+            }
+            decimalPos = i
+            continue
+        }
+
+        if b[i] < '0' || b[i] > '9' {
+            return 0, fmt.Errorf("invalid character: %c", b[i])
+        }
+
+        digit := float64(b[i] - '0')
+        result = result*10 + digit
+    }
+
+    if decimalPos >= 0 {
+        decimalPlaces := len(b) - decimalPos - 1
+        result = result / math.Pow10(decimalPlaces)
+    }
+
+    if isNegative {
+        result = -result
+    }
+
+    return float32(result), nil
+}
+
 func ParseCSVFile(filepath string, map_statistics map[uint32]*DataFields, wg *sync.WaitGroup) {
 	// Signal that this goroutine is done
 	defer wg.Done()
@@ -293,11 +340,11 @@ func ParseCSVFile(filepath string, map_statistics map[uint32]*DataFields, wg *sy
 			map_statistics[nu_documento_uint32] = df
 		}
 
-		vn, err := strconv.ParseFloat(string(vn_data), 32)
+		vn, err := ParseFloat32(vn_data)
 		check(err)
-		vp, err := strconv.ParseFloat(string(vp_data), 32)
+		vp, err := ParseFloat32(vp_data)
 		check(err)
-		va, err := strconv.ParseFloat(string(va_data), 32)
+		va, err := ParseFloat32(va_data)
 		check(err)
 
 		df.vn.ComputeStatistics(float32(vn))
