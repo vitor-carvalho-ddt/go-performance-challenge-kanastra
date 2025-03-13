@@ -99,13 +99,13 @@ func (ds *DataStatistics) setMin(value float32) {
 
 // STRUCT SIZE = 3*16bytes = 48bytes + strings
 type DataFields struct {
-	vn DataStatistics
-	vp DataStatistics
-	va DataStatistics
 	// nome_cedente []byte
 	// doc_cedente  []byte
 	// nome_sacado  []byte
 	// doc_sacado   []byte
+	vn DataStatistics
+	vp DataStatistics
+	va DataStatistics
 }
 
 func (df *DataFields) SetInitialValues() {
@@ -138,12 +138,16 @@ func check(e error) {
 	}
 }
 
-func FetchDataCols(line_bytes []byte, delimiter_bytes []byte) ([]byte, []byte, []byte, []byte) {
+func FetchDataCols(line_bytes []byte, delimiter_bytes []byte) ([]byte, []byte, []byte, []byte, []byte, []byte, []byte, []byte) {
 	// buffer
 	var nu_doc_data []byte
 	var vn_data []byte
 	var vp_data []byte
 	var va_data []byte
+	var nome_cedente []byte
+	var doc_cedente []byte
+	var nome_sacado []byte
+	var doc_sacado []byte
 
 	num_cols := 54 - 1 // 54 columns minus 1 from EOL
 	delimiter_positions := uint16bufferPool.Get().(*[]uint16)
@@ -165,6 +169,10 @@ func FetchDataCols(line_bytes []byte, delimiter_bytes []byte) ([]byte, []byte, [
 	vn_data = line_bytes[dp[constants.VALOR_NOMINAL_COL-1]+1 : dp[constants.VALOR_NOMINAL_COL]]
 	vp_data = line_bytes[dp[constants.VALOR_PRESENTE_COL-1]+1 : dp[constants.VALOR_PRESENTE_COL]]
 	va_data = line_bytes[dp[constants.VALOR_AQUISICAO_COL-1]+1 : dp[constants.VALOR_AQUISICAO_COL]]
+	nome_cedente = line_bytes[dp[constants.NOME_CEDENTE_COL-1]+1 : dp[constants.NOME_CEDENTE_COL]]
+	doc_cedente = line_bytes[dp[constants.DOC_CEDENTE_COL-1]+1 : dp[constants.DOC_CEDENTE_COL]]
+	nome_sacado = line_bytes[dp[constants.NOME_SACADO_COL-1]+1 : dp[constants.NOME_SACADO_COL]]
+	doc_sacado = line_bytes[dp[constants.DOC_SACADO_COL-1]+1 : dp[constants.DOC_SACADO_COL]]
 
 	uint16bufferPool.Put(delimiter_positions)
 
@@ -176,10 +184,10 @@ func FetchDataCols(line_bytes []byte, delimiter_bytes []byte) ([]byte, []byte, [
 	// parts := bytes.Split(line_bytes, delimiter_bytes)
 
 	if len(nu_doc_data) == 0 {
-		return []byte{}, []byte{}, []byte{}, []byte{}
+		return []byte{}, []byte{}, []byte{}, []byte{}, []byte{}, []byte{}, []byte{}, []byte{}
 	}
 
-	return vn_data, vp_data, va_data, nu_doc_data
+	return vn_data, vp_data, va_data, nu_doc_data, nome_cedente, doc_cedente, nome_sacado, doc_sacado
 }
 
 func GetCWD() string {
@@ -300,7 +308,7 @@ func ParseCSVFile(filepath string, map_statistics map[uint32]*DataFields) {
 			fmt.Printf("FILEPATH: %s\n\n", filepath)
 		}
 
-		vn_data, vp_data, va_data, nu_documento := FetchDataCols(line, delimiter)
+		vn_data, vp_data, va_data, nu_documento, nome_cedente, doc_cedente, nome_sacado, doc_sacado := FetchDataCols(line, delimiter)
 
 		if len(nu_documento) < 1 {
 			fmt.Printf("FILEPATH WITH LINE ERROR:\n %s\n\n", filepath)
@@ -312,18 +320,18 @@ func ParseCSVFile(filepath string, map_statistics map[uint32]*DataFields) {
 			continue
 		}
 
-		// if !bytes.Equal(filterNomeCedente, []byte("")) && !bytes.Equal(filterNomeCedente, nome_cedente) {
-		// 	continue
-		// }
-		// if !bytes.Equal(filterDocCedente, []byte("")) && !bytes.Equal(filterDocCedente, doc_cedente) {
-		// 	continue
-		// }
-		// if !bytes.Equal(filterNomeSacado, []byte("")) && !bytes.Equal(filterNomeSacado, nome_sacado) {
-		// 	continue
-		// }
-		// if !bytes.Equal(filterDocSacado, []byte("")) && !bytes.Equal(filterDocSacado, doc_sacado) {
-		// 	continue
-		// }
+		if !bytes.Equal(filterNomeCedente, []byte("")) && !bytes.Equal(filterNomeCedente, nome_cedente) {
+			continue
+		}
+		if !bytes.Equal(filterDocCedente, []byte("")) && !bytes.Equal(filterDocCedente, doc_cedente) {
+			continue
+		}
+		if !bytes.Equal(filterNomeSacado, []byte("")) && !bytes.Contains(nome_sacado, filterNomeSacado) {
+			continue
+		}
+		if !bytes.Equal(filterDocSacado, []byte("")) && !bytes.Equal(filterDocSacado, doc_sacado) {
+			continue
+		}
 
 		// Lock before modifying the shared structure
 		nu_documento_int, err := byteArrayToInt(nu_documento)
@@ -391,6 +399,7 @@ func WriteDataRowNew(b []byte, w io.Writer, key uint32, df *DataFields) error {
 	b = strconv.AppendFloat(b, float64(df.va.max), 'f', -1, 32)
 	b = append(b, separator)
 	b = strconv.AppendFloat(b, float64(df.va.min), 'f', -1, 32)
+
 	b = append(b, '\n')
 
 	// Write the complete row at once.
@@ -401,9 +410,32 @@ func WriteDataRowNew(b []byte, w io.Writer, key uint32, df *DataFields) error {
 func GenerateOutputFile(map_statistics map[uint32]*DataFields) {
 	err := os.MkdirAll("output", 0755)
 	check(err)
+
+	var output_filename bytes.Buffer
 	// Build new file
-	output_filename := "output/calculations.csv"
-	filePtr, err := os.OpenFile(output_filename, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+	name_prefix := "output/calculations"
+	output_filename.WriteString(name_prefix)
+	//Filter to add to output file name
+	if !bytes.Equal(filterNomeCedente, []byte("")){
+		output_filename.WriteString("_nome_cedente_is_")
+		output_filename.WriteString(string(filterNomeCedente[:]))
+	}
+	if !bytes.Equal(filterDocCedente, []byte("")){
+		output_filename.WriteString("_doc_cedente_is_")
+		output_filename.WriteString(string(filterDocCedente[:]))
+	}
+	if !bytes.Equal(filterNomeSacado, []byte("")){
+		output_filename.WriteString("_nome_sacado_contains_")
+		output_filename.WriteString(string(filterNomeSacado[:]))
+	}
+	if !bytes.Equal(filterDocSacado, []byte("")){
+		output_filename.WriteString("_doc_sacado_is_")
+		output_filename.WriteString(string(filterDocSacado[:]))
+	}
+	
+	output_filename.WriteString(".csv")
+
+	filePtr, err := os.OpenFile(output_filename.String(), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 	check(err)
 	defer filePtr.Close()
 
@@ -411,7 +443,7 @@ func GenerateOutputFile(map_statistics map[uint32]*DataFields) {
 	writer := bufio.NewWriter(filePtr)
 
 	// Write to file
-	col_names := "NU_DOCUMENTO,VN_SOMA,VN_MEDIA,VN_MAX,VN_MIN,VP_SOMA,VP_MEDIA,VP_MAX,VP_MIN,VA_SOMA,VA_MEDIA,VA_MAX,VA_MIN\n" //,NOME_CEDENTE,DOC_CEDENTE,NOME_SACADO,DOC_SACADO\n"
+	col_names := "NU_DOCUMENTO,VN_SOMA,VN_MEDIA,VN_MAX,VN_MIN,VP_SOMA,VP_MEDIA,VP_MAX,VP_MIN,VA_SOMA,VA_MEDIA,VA_MAX,VA_MIN,NOME_CEDENTE,DOC_CEDENTE,NOME_SACADO,DOC_SACADO\n"
 	writer.WriteString(col_names)
 	writer.Flush()
 
