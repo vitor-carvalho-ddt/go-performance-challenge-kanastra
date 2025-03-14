@@ -172,42 +172,46 @@ func check(e error) {
 	}
 }
 
-func FetchDocNum(line_bytes []byte, delimiter_bytes []byte) ([]byte) {
-	// buffer
-	var nu_doc_data []byte
+// func FetchDocNum(line_bytes []byte, delimiter_bytes []byte) ([]byte) {
+// 	// buffer
+// 	var nu_doc_data []byte
+//
+// 	num_cols := 54 - 1 // 54 columns minus 1 from EOL
+// 	delimiter_positions := uint16bufferPool.Get().(*[]uint16)
+// 	dp := *delimiter_positions
+// 	dp = dp[:53]
+//
+// 	count := 0
+// 	for index := range line_bytes {
+// 		if line_bytes[index] == byte(';') {
+// 			dp[count] = uint16(index)
+// 			count++
+// 			if count > num_cols {
+// 				break
+// 			}
+// 		}
+// 	}
+//
+// 	nu_doc_data = line_bytes[dp[constants.NU_DOCUMENTO_COL-1]+1 : dp[constants.NU_DOCUMENTO_COL]]
+// 	uint16bufferPool.Put(delimiter_positions)
+//
+// 	if len(nu_doc_data) == 0 {
+// 		return []byte{}
+// 	}
+//
+// 	return nu_doc_data
+// }
 
-	num_cols := 54 - 1 // 54 columns minus 1 from EOL
-	delimiter_positions := uint16bufferPool.Get().(*[]uint16)
-	dp := *delimiter_positions
-	dp = dp[:53]
-
-	count := 0
-	for index := range line_bytes {
-		if line_bytes[index] == byte(';') {
-			dp[count] = uint16(index)
-			count++
-			if count > num_cols {
-				break
-			}
-		}
-	}
-
-	nu_doc_data = line_bytes[dp[constants.NU_DOCUMENTO_COL-1]+1 : dp[constants.NU_DOCUMENTO_COL]]
-	uint16bufferPool.Put(delimiter_positions)
-
-	if len(nu_doc_data) == 0 {
-		return []byte{}
-	}
-
-	return nu_doc_data
-}
-
-func FetchDataCols(line_bytes []byte, delimiter_bytes []byte) ([]byte, []byte, []byte, []byte) {
+func FetchDataCols(line_bytes []byte, delimiter_bytes []byte) ([]byte, []byte, []byte, []byte, []byte, []byte, []byte, []byte) {
 	// buffer
 	var nu_doc_data []byte
 	var vn_data []byte
 	var vp_data []byte
 	var va_data []byte
+	var nome_cedente []byte
+	var doc_cedente []byte
+	var nome_sacado []byte
+	var doc_sacado []byte
 
 	num_cols := 54 - 1 // 54 columns minus 1 from EOL
 	delimiter_positions := uint16bufferPool.Get().(*[]uint16)
@@ -229,6 +233,10 @@ func FetchDataCols(line_bytes []byte, delimiter_bytes []byte) ([]byte, []byte, [
 	vn_data = line_bytes[dp[constants.VALOR_NOMINAL_COL-1]+1 : dp[constants.VALOR_NOMINAL_COL]]
 	vp_data = line_bytes[dp[constants.VALOR_PRESENTE_COL-1]+1 : dp[constants.VALOR_PRESENTE_COL]]
 	va_data = line_bytes[dp[constants.VALOR_AQUISICAO_COL-1]+1 : dp[constants.VALOR_AQUISICAO_COL]]
+	nome_cedente = line_bytes[dp[constants.NOME_CEDENTE_COL-1]+1 : dp[constants.NOME_CEDENTE_COL]]
+	doc_cedente = line_bytes[dp[constants.DOC_CEDENTE_COL-1]+1 : dp[constants.DOC_CEDENTE_COL]]
+	nome_sacado = line_bytes[dp[constants.NOME_SACADO_COL-1]+1 : dp[constants.NOME_SACADO_COL]]
+	doc_sacado = line_bytes[dp[constants.DOC_SACADO_COL-1]+1 : dp[constants.DOC_SACADO_COL]]
 
 	uint16bufferPool.Put(delimiter_positions)
 
@@ -240,10 +248,10 @@ func FetchDataCols(line_bytes []byte, delimiter_bytes []byte) ([]byte, []byte, [
 	// parts := bytes.Split(line_bytes, delimiter_bytes)
 
 	if len(nu_doc_data) == 0 {
-		return []byte{}, []byte{}, []byte{}, []byte{}
+		return []byte{}, []byte{}, []byte{}, []byte{}, []byte{}, []byte{}, []byte{}, []byte{}
 	}
 
-	return vn_data, vp_data, va_data, nu_doc_data
+	return vn_data, vp_data, va_data, nu_doc_data, nome_cedente, doc_cedente, nome_sacado, doc_sacado
 }
 
 func GetCWD() string {
@@ -364,8 +372,25 @@ func GenerateKeysBuffer(filepath string, keybuffer_map map[uint32]uint32){
 			fmt.Printf("FILEPATH: %s\n\n", filepath)
 		}
 
-		nu_documento := FetchDocNum(line, delimiter)
+		_, _, _, nu_documento, nome_cedente, doc_cedente, nome_sacado, doc_sacado:= FetchDataCols(line, delimiter)
 
+		// Filter map so we can loop through filters
+		if !bytes.Equal(filterDocNum, []byte("")) && !bytes.Equal(filterDocNum, nu_documento) {
+			continue
+		}
+
+		if !bytes.Equal(filterNomeCedente, []byte("")) && !bytes.Equal(filterNomeCedente, nome_cedente) {
+			continue
+		}
+		if !bytes.Equal(filterDocCedente, []byte("")) && !bytes.Equal(filterDocCedente, doc_cedente) {
+			continue
+		}
+		if !bytes.Equal(filterNomeSacado, []byte("")) && !bytes.Contains(nome_sacado, filterNomeSacado) {
+			continue
+		}
+		if !bytes.Equal(filterDocSacado, []byte("")) && !bytes.Equal(filterDocSacado, doc_sacado) {
+			continue
+		}
 		if len(nu_documento) < 1 {
 			fmt.Printf("FILEPATH WITH LINE ERROR:\n %s\n\n", filepath)
 			continue
@@ -427,7 +452,7 @@ func ParseCSVFile(filepath string, map_statistics map[uint32]*DataFields, keybuf
 			fmt.Printf("FILEPATH: %s\n\n", filepath)
 		}
 
-		vn_data, vp_data, va_data, nu_documento := FetchDataCols(line, delimiter)
+		vn_data, vp_data, va_data, nu_documento, nome_cedente, doc_cedente, nome_sacado, doc_sacado := FetchDataCols(line, delimiter)
 
 		if len(nu_documento) < 1 {
 			fmt.Printf("FILEPATH WITH LINE ERROR:\n %s\n\n", filepath)
@@ -439,18 +464,18 @@ func ParseCSVFile(filepath string, map_statistics map[uint32]*DataFields, keybuf
 			continue
 		}
 
-		// if !bytes.Equal(filterNomeCedente, []byte("")) && !bytes.Equal(filterNomeCedente, nome_cedente) {
-		// 	continue
-		// }
-		// if !bytes.Equal(filterDocCedente, []byte("")) && !bytes.Equal(filterDocCedente, doc_cedente) {
-		// 	continue
-		// }
-		// if !bytes.Equal(filterNomeSacado, []byte("")) && !bytes.Equal(filterNomeSacado, nome_sacado) {
-		// 	continue
-		// }
-		// if !bytes.Equal(filterDocSacado, []byte("")) && !bytes.Equal(filterDocSacado, doc_sacado) {
-		// 	continue
-		// }
+		if !bytes.Equal(filterNomeCedente, []byte("")) && !bytes.Equal(filterNomeCedente, nome_cedente) {
+			continue
+		}
+		if !bytes.Equal(filterDocCedente, []byte("")) && !bytes.Equal(filterDocCedente, doc_cedente) {
+			continue
+		}
+		if !bytes.Equal(filterNomeSacado, []byte("")) && !bytes.Contains(nome_sacado, filterNomeSacado) {
+			continue
+		}
+		if !bytes.Equal(filterDocSacado, []byte("")) && !bytes.Equal(filterDocSacado, doc_sacado) {
+			continue
+		}
 
 		// Lock before modifying the shared structure
 		nu_documento_int, err := byteArrayToInt(nu_documento)
@@ -548,26 +573,51 @@ func WriteDataRow(b []byte, w io.Writer, key uint32, df *DataFields) error {
 	return err
 }
 
-func GenerateOutputFile(map_statistics map[uint32]*DataFields, tag int) {
+func CreateOutputFile()string{
 	err := os.MkdirAll("output", 0755)
 	check(err)
+
+	var output_filename bytes.Buffer
 	// Build new file
-	var write_mode int
-	if tag == 1{
-		write_mode = os.O_TRUNC
-	}else{
-		write_mode = os.O_APPEND
+	name_prefix := "output/calculations"
+	output_filename.WriteString(name_prefix)
+	//Filter to add to output file name
+	if !bytes.Equal(filterNomeCedente, []byte("")){
+		output_filename.WriteString("_nome_cedente_is_")
+		output_filename.WriteString(string(filterNomeCedente[:]))
 	}
-	output_filename := "output/calculations.csv"
-	filePtr, err := os.OpenFile(output_filename, os.O_CREATE|os.O_WRONLY|write_mode, 0644)
+	if !bytes.Equal(filterDocCedente, []byte("")){
+		output_filename.WriteString("_doc_cedente_is_")
+		output_filename.WriteString(string(filterDocCedente[:]))
+	}
+	if !bytes.Equal(filterNomeSacado, []byte("")){
+		output_filename.WriteString("_nome_sacado_contains_")
+		output_filename.WriteString(string(filterNomeSacado[:]))
+	}
+	if !bytes.Equal(filterDocSacado, []byte("")){
+		output_filename.WriteString("_doc_sacado_is_")
+		output_filename.WriteString(string(filterDocSacado[:]))
+	}
+	
+	output_filename.WriteString(".csv")
+	
+	filePtr, err := os.OpenFile(output_filename.String(), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+	check(err)
+	defer filePtr.Close()
+
+	return output_filename.String()
+}
+
+func GenerateOutputFile(map_statistics map[uint32]*DataFields, tag int, output_filename string, iteration int) {
+	filePtr, err := os.OpenFile(output_filename, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	check(err)
 	defer filePtr.Close()
 
 	// Use buffered writer
 	writer := bufio.NewWriter(filePtr)
 
-	if tag == 1{
-		// Write to file
+	// Write to file
+	if iteration == 1{
 		col_names := "NU_DOCUMENTO,VN_SOMA,VN_MEDIA,VN_MAX,VN_MIN,VP_SOMA,VP_MEDIA,VP_MAX,VP_MIN,VA_SOMA,VA_MEDIA,VA_MAX,VA_MIN\n" //,NOME_CEDENTE,DOC_CEDENTE,NOME_SACADO,DOC_SACADO\n"
 		writer.WriteString(col_names)
 		writer.Flush()
@@ -653,6 +703,7 @@ func main() {
 	// DataFields: 48 bytes
 	// Subtotal: 4 + 8 + 48 ~ 60 bytes per entry
 	// Reopening channel
+	output_filename := CreateOutputFile()
     filesChanProc := make(chan string, len(filenames))
 	max_nu_doc_per_parse := 50000
 	map_statistics := make(map[uint32]*DataFields, max_nu_doc_per_parse)
@@ -681,7 +732,7 @@ func main() {
  	  	}
     	close(filesChanProc)
 		wg.Wait()
-		GenerateOutputFile(map_statistics, c)
+		GenerateOutputFile(map_statistics, c, output_filename,c)
 		// iterate through each key to delete
 		for key, df := range map_statistics {
 			putDataField(df)
