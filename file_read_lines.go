@@ -69,7 +69,6 @@ var filterNomeSacado []byte
 var filterDocSacado []byte
 
 func init() {
-	// Local Placeholders
 	var filterDocNumString string
 	var filterNomeCedenteString string
 	var filterDocCedenteString string
@@ -172,38 +171,8 @@ func check(e error) {
 	}
 }
 
-// func FetchDocNum(line_bytes []byte, delimiter_bytes []byte) ([]byte) {
-// 	// buffer
-// 	var nu_doc_data []byte
-//
-// 	num_cols := 54 - 1 // 54 columns minus 1 from EOL
-// 	delimiter_positions := uint16bufferPool.Get().(*[]uint16)
-// 	dp := *delimiter_positions
-// 	dp = dp[:53]
-//
-// 	count := 0
-// 	for index := range line_bytes {
-// 		if line_bytes[index] == byte(';') {
-// 			dp[count] = uint16(index)
-// 			count++
-// 			if count > num_cols {
-// 				break
-// 			}
-// 		}
-// 	}
-//
-// 	nu_doc_data = line_bytes[dp[constants.NU_DOCUMENTO_COL-1]+1 : dp[constants.NU_DOCUMENTO_COL]]
-// 	uint16bufferPool.Put(delimiter_positions)
-//
-// 	if len(nu_doc_data) == 0 {
-// 		return []byte{}
-// 	}
-//
-// 	return nu_doc_data
-// }
-
 func FetchDataCols(line_bytes []byte, delimiter_bytes []byte) ([]byte, []byte, []byte, []byte, []byte, []byte, []byte, []byte) {
-	// buffer
+	// buffers
 	var nu_doc_data []byte
 	var vn_data []byte
 	var vp_data []byte
@@ -244,8 +213,6 @@ func FetchDataCols(line_bytes []byte, delimiter_bytes []byte) ([]byte, []byte, [
 	RemoveComma(vn_data)
 	RemoveComma(vp_data)
 	RemoveComma(va_data)
-
-	// parts := bytes.Split(line_bytes, delimiter_bytes)
 
 	if len(nu_doc_data) == 0 {
 		return []byte{}, []byte{}, []byte{}, []byte{}, []byte{}, []byte{}, []byte{}, []byte{}
@@ -335,12 +302,10 @@ func ParseFloat32(b []byte) (float32, error) {
 }
 
 func GenerateKeysBuffer(filepath string, keybuffer_map map[uint32]uint32){
-	// Open File Ptr
 	filePtr, err := os.Open(filepath)
 	check(err)
 	defer filePtr.Close()
 
-	// Counting Lines in the file
 	bufferSize := 4 * 1024 // 4Kb
 	bufReader := bufio.NewReaderSize(filePtr, bufferSize)
 
@@ -352,7 +317,6 @@ func GenerateKeysBuffer(filepath string, keybuffer_map map[uint32]uint32){
 		// Read line by line
 		line, err = bufReader.ReadSlice('\n')
 		if err != nil {
-			// If we reached the end of file, print the last line if not empty.
 			if err == io.EOF {
 				if len(line) > 0 {
 					eof_flag = true
@@ -362,7 +326,6 @@ func GenerateKeysBuffer(filepath string, keybuffer_map map[uint32]uint32){
 			fmt.Printf("Error reading line: %v\n", err)
 			break
 		}
-		// Skipping column names
 		if lineNum == 0 {
 			lineNum++
 			continue
@@ -374,7 +337,6 @@ func GenerateKeysBuffer(filepath string, keybuffer_map map[uint32]uint32){
 
 		_, _, _, nu_documento, nome_cedente, doc_cedente, nome_sacado, doc_sacado:= FetchDataCols(line, delimiter)
 
-		// Filter map so we can loop through filters
 		if !bytes.Equal(filterDocNum, []byte("")) && !bytes.Equal(filterDocNum, nu_documento) {
 			continue
 		}
@@ -415,12 +377,10 @@ func GenerateKeysBuffer(filepath string, keybuffer_map map[uint32]uint32){
 }
 
 func ParseCSVFile(filepath string, map_statistics map[uint32]*DataFields, keybuffer_map map[uint32]uint32, max_nu_doc_per_parse int) {
-	// Open File Ptr
 	filePtr, err := os.Open(filepath)
 	check(err)
 	defer filePtr.Close()
 
-	// Counting Lines in the file
 	bufferSize := 4 * 1024 // 4Kb
 	bufReader := bufio.NewReaderSize(filePtr, bufferSize)
 
@@ -432,7 +392,6 @@ func ParseCSVFile(filepath string, map_statistics map[uint32]*DataFields, keybuf
 		// Read line by line
 		line, err = bufReader.ReadSlice('\n')
 		if err != nil {
-			// If we reached the end of file, print the last line if not empty.
 			if err == io.EOF {
 				if len(line) > 0 {
 					eof_flag = true
@@ -442,7 +401,6 @@ func ParseCSVFile(filepath string, map_statistics map[uint32]*DataFields, keybuf
 			fmt.Printf("Error reading line: %v\n", err)
 			break
 		}
-		// Skipping column names
 		if lineNum == 0 {
 			lineNum++
 			continue
@@ -459,11 +417,9 @@ func ParseCSVFile(filepath string, map_statistics map[uint32]*DataFields, keybuf
 			continue
 		}
 
-		// Filter map so we can loop through filters
 		if !bytes.Equal(filterDocNum, []byte("")) && !bytes.Equal(filterDocNum, nu_documento) {
 			continue
 		}
-
 		if !bytes.Equal(filterNomeCedente, []byte("")) && !bytes.Equal(filterNomeCedente, nome_cedente) {
 			continue
 		}
@@ -538,7 +494,6 @@ func WriteDataRow(b []byte, w io.Writer, key uint32, df *DataFields) error {
 	separator := byte(',')
 	b = append(b, separator)
 
-	// Append "vn" values.
 	b = strconv.AppendFloat(b, float64(df.vn.sum), 'f', -1, 32)
 	b = append(b, separator)
 	b = strconv.AppendFloat(b, float64(df.vn.sum)/float64(df.vn.num_records), 'f', -1, 32)
@@ -548,7 +503,6 @@ func WriteDataRow(b []byte, w io.Writer, key uint32, df *DataFields) error {
 	b = strconv.AppendFloat(b, float64(df.vn.min), 'f', -1, 32)
 	b = append(b, separator)
 
-	// Append "vp" values.
 	b = strconv.AppendFloat(b, float64(df.vp.sum), 'f', -1, 32)
 	b = append(b, separator)
 	b = strconv.AppendFloat(b, float64(df.vp.sum)/float64(df.vp.num_records), 'f', -1, 32)
@@ -558,7 +512,6 @@ func WriteDataRow(b []byte, w io.Writer, key uint32, df *DataFields) error {
 	b = strconv.AppendFloat(b, float64(df.vp.min), 'f', -1, 32)
 	b = append(b, separator)
 
-	// Append "va" values.
 	b = strconv.AppendFloat(b, float64(df.va.sum), 'f', -1, 32)
 	b = append(b, separator)
 	b = strconv.AppendFloat(b, float64(df.va.sum)/float64(df.va.num_records), 'f', -1, 32)
@@ -568,7 +521,6 @@ func WriteDataRow(b []byte, w io.Writer, key uint32, df *DataFields) error {
 	b = strconv.AppendFloat(b, float64(df.va.min), 'f', -1, 32)
 	b = append(b, '\n')
 
-	// Write the complete row at once.
 	_, err := w.Write(b)
 	return err
 }
@@ -616,7 +568,7 @@ func GenerateOutputFile(map_statistics map[uint32]*DataFields, tag int, output_f
 	// Use buffered writer
 	writer := bufio.NewWriter(filePtr)
 
-	// Write to file
+	// Write header to file
 	if iteration == 1{
 		col_names := "NU_DOCUMENTO,VN_SOMA,VN_MEDIA,VN_MAX,VN_MIN,VP_SOMA,VP_MEDIA,VP_MAX,VP_MIN,VA_SOMA,VA_MEDIA,VA_MAX,VA_MIN\n" //,NOME_CEDENTE,DOC_CEDENTE,NOME_SACADO,DOC_SACADO\n"
 		writer.WriteString(col_names)
@@ -636,10 +588,7 @@ func GenerateOutputFile(map_statistics map[uint32]*DataFields, tag int, output_f
 }
 
 func main() {
-	// Start time tracking
 	start := time.Now()
-
-	// Start CPU profiling
 	cpuProfileFile, err := os.Create("cpu_profile.pprof")
 	if err != nil {
 		log.Fatal("could not create CPU profile: ", err)
@@ -661,23 +610,23 @@ func main() {
 	entries := GetFilePathList(folderPath)
 
 	// Filter CSV files first
-    var filenames []string
-    for _, entry := range entries {
-        name := entry.Name()
-        if !strings.Contains(name, "Zone.Identifier") && strings.HasSuffix(name, ".csv") {
-            filenames = append(filenames, folderPath+"/"+name)
-        }
-    }
+	var filenames []string
+	for _, entry := range entries {
+		name := entry.Name()
+		if !strings.Contains(name, "Zone.Identifier") && strings.HasSuffix(name, ".csv") {
+		filenames = append(filenames, folderPath+"/"+name)
+		}
+	}
 
 	// Create a channel to distribute work
-    filesChan := make(chan string, len(filenames))
+	filesChan := make(chan string, len(filenames))
 	var wg sync.WaitGroup
 
 	// Determine number of workers
-    numWorkers := runtime.NumCPU()
+	numWorkers := runtime.NumCPU()
 	fmt.Printf("Max Workers: %d\n", numWorkers)
 
-	keybuffer_map := make(map[uint32]uint32, 1000000)
+	keybuffer_map := make(map[uint32]uint32)
 	// First pass generate keybuffer_map
 	for i:=0; i<numWorkers; i++{
 		wg.Add(1)
@@ -691,10 +640,10 @@ func main() {
 	}
 
 	// Feed files into the channel
-    for _, filename := range filenames {
-        filesChan <- filename
-    }
-    close(filesChan)
+	for _, filename := range filenames {
+		filesChan <- filename
+	}
+	close(filesChan)
 	wg.Wait()
 
 	// Creating my map data structure
@@ -704,8 +653,9 @@ func main() {
 	// Subtotal: 4 + 8 + 48 ~ 60 bytes per entry
 	// Reopening channel
 	output_filename := CreateOutputFile()
-    filesChanProc := make(chan string, len(filenames))
-	max_nu_doc_per_parse := 50000
+	filesChanProc := make(chan string, len(filenames))
+	max_nu_doc_per_parse_float := len(keybuffer_map)/10
+	max_nu_doc_per_parse := int(max_nu_doc_per_parse_float)
 	map_statistics := make(map[uint32]*DataFields, max_nu_doc_per_parse)
 	preAllocateDataFieldsPool(max_nu_doc_per_parse)
 	
@@ -730,7 +680,7 @@ func main() {
  	  	for _, filename := range filenames {
  	  	    filesChanProc <- filename
  	  	}
-    	close(filesChanProc)
+	    	close(filesChanProc)
 		wg.Wait()
 		GenerateOutputFile(map_statistics, c, output_filename,c)
 		// iterate through each key to delete
@@ -742,8 +692,6 @@ func main() {
 		filesChanProc = make(chan string, len(filenames))
 		c++
 	}
-
-	// Final GC Overhead
 	runtime.GC()
 
 
