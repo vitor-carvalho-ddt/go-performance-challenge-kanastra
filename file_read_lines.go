@@ -626,7 +626,7 @@ func main() {
 	numWorkers := runtime.NumCPU()
 	fmt.Printf("Max Workers: %d\n", numWorkers)
 
-	keybuffer_map := make(map[uint32]uint32)
+	keybuffer_map := make(map[uint32]uint32, 1000000)
 	// First pass generate keybuffer_map
 	for i:=0; i<numWorkers; i++{
 		wg.Add(1)
@@ -654,8 +654,8 @@ func main() {
 	// Reopening channel
 	output_filename := CreateOutputFile()
 	filesChanProc := make(chan string, len(filenames))
-	max_nu_doc_per_parse_float := len(keybuffer_map)/10
-	max_nu_doc_per_parse := int(max_nu_doc_per_parse_float)
+	// max_nu_doc_per_parse_float := len(keybuffer_map)/10
+	max_nu_doc_per_parse := 100000// int(max_nu_doc_per_parse_float)
 	map_statistics := make(map[uint32]*DataFields, max_nu_doc_per_parse)
 	preAllocateDataFieldsPool(max_nu_doc_per_parse)
 	
